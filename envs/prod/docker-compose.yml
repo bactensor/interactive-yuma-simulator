@@ -1,0 +1,94 @@
+version: '3.7'
+
+services:
+  redis:
+    image: redis:6-alpine
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: redis-cli ping
+    restart: unless-stopped
+    volumes:
+      - ./redis/data:/data
+    logging: &logging
+      driver: journald
+      options:
+        tag: '{{.Name}}'
+
+  db:
+    image: postgres:14.0-alpine
+    healthcheck:
+      test: pg_isready -U ${POSTGRES_USER} || exit 1
+    restart: unless-stopped
+    env_file: ./.env
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - ./db/data:/var/lib/postgresql/data
+    logging:
+      <<: *logging
+
+  app:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    image: project/app
+    healthcheck:
+      test: ["CMD", "./healthcheck.py", "/var/run/gunicorn/gunicorn.sock"]
+    init: true
+    restart: unless-stopped
+    env_file: ./.env
+    
+    volumes:
+      - backend-static:/root/src/static
+      - gunicorn-socket:/var/run/gunicorn
+      - ./media:/root/src/media
+      
+    depends_on:
+      - redis
+      - db
+    logging:
+      <<: *logging
+
+  nginx:
+    image: 'ghcr.io/reef-technologies/nginx-rt:v1.2.2'
+    restart: unless-stopped
+    healthcheck:
+      test: [
+        "CMD-SHELL",
+        "curl 0.0.0.0:80/admin/login/ -s --fail -H \"Host: $NGINX_HOST\" -H \"User-Agent: docker-compose-healthcheck\" -o /dev/null || exit 1"
+      ]
+      interval: 30s
+      retries: 5
+      start_period: 20s
+      timeout: 10s
+    environment:
+      - NGINX_HOST=${NGINX_HOST}
+    volumes:
+      - ./nginx/templates:/etc/nginx/templates
+      - ./nginx/config_helpers:/etc/nginx/config_helpers
+      - backend-static:/srv/static:ro
+      - ./media:/srv/media:ro
+      - ./letsencrypt/etc:/etc/letsencrypt
+      - ./nginx/monitoring_certs:/etc/monitoring_certs
+      - gunicorn-socket:/var/run/gunicorn:ro
+    depends_on:
+      - app
+      
+    command: nginx -g 'daemon off;'
+    ports:
+      - 80:80
+      - 443:443
+      
+    logging:
+      <<: *logging
+    
+
+  
+
+  
+
+volumes:
+  backend-static:
+  gunicorn-socket:

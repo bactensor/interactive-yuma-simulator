@@ -1,0 +1,57 @@
+version: '3.7'
+
+services:
+  app:
+    image: ${ecr_base_url}/${ecr_image}
+    init: true
+    restart: always
+    env_file: ./.env
+    healthcheck:
+      test: ["CMD", "./healthcheck.py", "/var/run/gunicorn/gunicorn.sock"]
+    
+    volumes:
+      - backend-static:/root/src/static
+      - gunicorn-socket:/var/run/gunicorn
+      - ./media:/root/src/media
+    
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ${region}
+        awslogs-group: /aws/ec2/${name}-${env}
+        tag: '$${INSTANCE_ID_SUBST}-app'
+        awslogs-create-group: "true"
+
+  
+
+  nginx:
+    image: 'ghcr.io/reef-technologies/nginx-rt:v1.2.2'
+    restart: unless-stopped
+    healthcheck:
+      test: wget -q --spider http://0.0.0.0:8000/admin/login/ || exit 1
+    depends_on:
+      - app
+      
+    command: nginx -g 'daemon off;'
+    ports:
+      
+      - 8000:8000
+    volumes:
+      - ./nginx/templates:/etc/nginx/templates
+      - ./nginx/config_helpers:/etc/nginx/config_helpers
+      - backend-static:/srv/static:ro
+      - ./media:/srv/media:ro
+      - ./nginx/monitoring_certs:/etc/monitoring_certs
+      - gunicorn-socket:/var/run/gunicorn:ro
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ${region}
+        awslogs-group: /aws/ec2/${name}-${env}
+        tag: '$${INSTANCE_ID_SUBST}-nginx'
+        awslogs-create-group: "true"
+    
+
+volumes:
+  backend-static:
+  gunicorn-socket:
