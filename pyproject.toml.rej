@@ -1,0 +1,10 @@
+diff a/pyproject.toml b/pyproject.toml	(rejected hunks)
+@@ -27,7 +27,7 @@ build-backend = "pdm.backend"
+ [tool.pdm]
+ distribution = false
+ 
+-[tool.pdm.dev-dependencies]
++[dependency-groups]
+ test = [
+     'pytest',
+     'pytest-django',

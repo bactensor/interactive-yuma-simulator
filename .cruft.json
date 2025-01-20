@@ -1,6 +1,6 @@
 {
   "template": "https://github.com/reef-technologies/cookiecutter-rt-django",
-  "commit": "6a881c85a8bf2da60c560ab64b6de863a07aa9a8",
+  "commit": "4564a698c98fb0df523caa6cd7fce98c465ae00d",
   "checkout": null,
   "context": {
     "cookiecutter": {
@@ -21,6 +21,7 @@
       "use_allauth": "n",
       "allauth_trust_external_emails": "n",
       "allauth_providers": "google",
+      "vulnerabilities_scanning": "y",
       "sentry_dsn": "",
       "csp_enabled": "n",
       "csp_report_only": "n",
@@ -58,7 +59,8 @@
       "_copy_without_render": [
         ".github/workflows/cruft-updates.yml"
       ],
-      "_template": "https://github.com/reef-technologies/cookiecutter-rt-django"
+      "_template": "https://github.com/reef-technologies/cookiecutter-rt-django",
+      "_commit": "4564a698c98fb0df523caa6cd7fce98c465ae00d"
     }
   },
   "directory": null
