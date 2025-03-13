@@ -31,10 +31,10 @@ dependencies = [
     "psycopg2-binary>=2.9.10",
     "django-csp>=3.8",
     "matplotlib>=3.10.0",
-    "yuma-simulation @ file:///${PROJECT_ROOT}/yuma_simulation/yuma_simulation-0.1.0-py3-none-any.whl",
     "nvidia-cublas-cu12==12.4.5.8",
     "nvidia-cudnn-cu12==9.1.0.70",
     "torch==2.5.1",
+    "yuma-simulation @ file:///${PROJECT_ROOT}/yuma_simulation/yuma_simulation-0.1.0-py3-none-any.whl"
 ]
 
 [build-system]
