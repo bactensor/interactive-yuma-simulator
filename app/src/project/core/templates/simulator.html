@@ -1,134 +1,187 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Yuma Simulation</title>
-    <style>
-        html, body {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-            /* Remove height: 100vh and overflow: auto */
-        }
-        .container {
-            display: flex;
-            flex-direction: row;
-            justify-content: space-between;
-            min-height: 100vh;
-            padding: 20px;
-            overflow: auto; /* Enable scrolling for the container */
-        }
+  <title>Yuma Simulation</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    .container {
+      display: flex;
+      flex-direction: row;
+      justify-content: space-between;
+      min-height: 100vh;
+      padding: 20px;
+      overflow: auto;
+    }
+    .input-section, .results-section {
+      padding: 20px;
+      box-sizing: border-box;
+      overflow-y: auto;
+      transition: all 0.3s ease-in-out;
+    }
+    .input-section {
+      flex: 1 1 30%;
+      border-right: 1px solid #ccc;
+    }
+    .results-section {
+      flex: 1 1 70%;
+      overflow: auto;
+    }
+    .scrollable-div {
+      max-height: calc(100vh - 150px);
+      overflow-y: auto;
+      border: 1px solid #ccc;
+      padding: 10px;
+      background-color: #f9f9f9;
+    }
+    fieldset {
+      border: 1px solid #ccc;
+      padding: 10px;
+      margin-bottom: 15px;
+    }
+    legend {
+      font-weight: bold;
+    }
+    button {
+      padding: 10px;
+      font-size: 16px;
+      background-color: #007BFF;
+      color: #fff;
+      border: none;
+      cursor: pointer;
+      margin-bottom: 10px;
+    }
+    button:hover {
+      background-color: #0056b3;
+    }
 
-        .input-section, .results-section {
-            padding: 20px;
-            box-sizing: border-box;
-            overflow-y: auto;
-        }
+    /* Toggle arrow button */
+    .toggle-btn {
+      position: fixed;
+      top: 50vh; /* fixed vertically at the viewport’s center */
+      transform: translate(-50%, -50%);
+      z-index: 1000;
+      background-color: #007BFF;
+      color: #fff;
+      border: none;
+      padding: 10px;
+      font-size: 16px;
+      cursor: pointer;
+      border-radius: 4px;
+      transition: left 0.3s ease-in-out;
+    }
 
-        .input-section {
-            flex: 1 1 30%; /* Input section takes 30% of the width */
-            border-right: 1px solid #ccc;
-        }
+    /* Collapsed state: hide left panel */
+    .collapsed .input-section {
+      width: 0;
+      overflow: hidden;
+      padding: 0;
+      border: none;
+      flex: 0;
+    }
+    .collapsed .results-section {
+      flex: 1 1 100%;
+    }
 
-        .results-section {
-            flex: 1 1 70%; /* Results section takes 70% of the width */
-            overflow: auto; /* Ensure scrolling for the results section */
-        }
-
-        .results-section h2 {
-            margin-top: 0;
-        }
-
-        .scrollable-div {
-            max-height: calc(100vh - 150px); /* Dynamically adjust height for viewport */
-            overflow-y: auto; /* Enable vertical scrolling */
-            border: 1px solid #ccc;
-            padding: 10px;
-            background-color: #f9f9f9;
-        }
-
-
-        fieldset {
-            border: 1px solid #ccc;
-            padding: 10px;
-            margin-bottom: 15px;
-        }
-
-        legend {
-            font-weight: bold;
-        }
-
-        button {
-            width: 100%;
-            padding: 10px;
-            font-size: 16px;
-            background-color: #007BFF;
-            color: #fff;
-            border: none;
-            cursor: pointer;
-        }
-
-        button:hover {
-            background-color: #0056b3;
-        }
-
-        img, svg, canvas {
-            max-width: 100%; /* Ensure the chart scales with the container */
-            max-height: 100%;
-            object-fit: contain; /* Ensure the entire chart is visible without distortion */
-            display: block;
-        }
-
-        /* Ensure the chart is responsive and doesn't overflow */
-        .chart-wrapper {
-            width: 100%;
-            height: auto; /* Allow chart to resize dynamically */
-            display: flex;
-            justify-content: center;
-            align-items: center;
-        }
-    </style>
+    /* --- ADDED: Center the charts in collapsed mode --- */
+    /* Default (expanded): left-aligned (or unchanged) */
+    .chart-wrapper {
+      margin: 0;
+      text-align: left;
+    }
+    /* When container is collapsed, center the .chart-wrapper */
+    .container.collapsed .results-section .chart-wrapper {
+      margin: 0 auto;        /* center horizontally */
+      text-align: center;    /* center any inline elements inside */
+      display: block;        /* ensure margin auto works for block elements */
+      max-width: 80%;        /* optional: limit width so it doesn't stretch too wide */
+    }
+  </style>
 </head>
 <body>
-<div class="container">
+
+  <!-- Arrow button (its inner arrow is toggled via JS) -->
+  <button class="toggle-btn" id="toggleBtn" onclick="togglePanel()">&#9664;</button>
+
+  <div class="container" id="main-container">
     <!-- Input Section -->
     <div class="input-section">
-        <h1>Yuma Simulation</h1>
-        <form method="get">
-            <fieldset>
-                <legend>Select Cases and Yumas</legend>
-                {{ selection_form.as_p }}
-            </fieldset>
-
-            <fieldset>
-                <legend>Simulation Hyperparameters</legend>
-                {{ hyper_form.as_p }}
-            </fieldset>
-
-            <fieldset>
-                <legend>Yuma Parameters</legend>
-                {{ yuma_form.as_p }}
-            </fieldset>
-
-            <button type="submit">Generate</button>
-        </form>
+      <h1>Yuma Simulation</h1>
+      <form method="get">
+        <fieldset>
+          <legend>Select Cases and Yumas</legend>
+          {{ selection_form.as_p }}
+        </fieldset>
+        <fieldset>
+          <legend>Simulation Hyperparameters</legend>
+          {{ hyper_form.as_p }}
+        </fieldset>
+        <fieldset>
+          <legend>Yuma Parameters</legend>
+          {{ yuma_form.as_p }}
+        </fieldset>
+        <button type="submit">Generate</button>
+      </form>
     </div>
 
     <!-- Results Section -->
     <div class="results-section">
-        {% if chart_table_html %}
+      {% if chart_table_html %}
         <h2>Results</h2>
         <div class="scrollable-div">
-            <div class="chart-wrapper">
-                {{ chart_table_html|safe }}
-            </div>
+          <div class="chart-wrapper">
+            {{ chart_table_html|safe }}
+          </div>
         </div>
-        {% else %}
+      {% else %}
         <h2>Results</h2>
         <div class="scrollable-div">
-            <p>No results generated yet. Select options and click "Generate".</p>
+          <p>No results generated yet. Select options and click "Generate".</p>
         </div>
-        {% endif %}
+      {% endif %}
     </div>
-</div>
+  </div>
+
+  <script>
+    function updateArrowPosition() {
+      // Get container's dimensions.
+      const container = document.getElementById("main-container");
+      const toggleBtn = document.getElementById("toggleBtn");
+      const containerRect = container.getBoundingClientRect();
+      // Our container has 20px padding on left and right.
+      // When expanded, the left panel is 30% of (container width - 40px).
+      if (!container.classList.contains("collapsed")) {
+        const newLeft = containerRect.left + 20 + ((containerRect.width - 40) * 0.3);
+        toggleBtn.style.left = newLeft + "px";
+      } else {
+        // When collapsed, stick the arrow to the left container padding.
+        const newLeft = containerRect.left + 20;
+        toggleBtn.style.left = newLeft + "px";
+      }
+    }
+    
+    function togglePanel() {
+      const container = document.getElementById("main-container");
+      const toggleBtn = document.getElementById("toggleBtn");
+      // Toggle collapsed state.
+      if (container.classList.contains("collapsed")) {
+        container.classList.remove("collapsed");
+        toggleBtn.innerHTML = "&#9664;"; // left arrow: click to collapse.
+      } else {
+        container.classList.add("collapsed");
+        toggleBtn.innerHTML = "&#9654;"; // right arrow: click to expand.
+      }
+      // Update arrow position immediately.
+      updateArrowPosition();
+    }
+    
+    // Update arrow on load and resize.
+    window.addEventListener("load", updateArrowPosition);
+    window.addEventListener("resize", updateArrowPosition);
+  </script>
+
 </body>
 </html>

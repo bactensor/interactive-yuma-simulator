@@ -6,19 +6,28 @@ from yuma_simulation._internal.yumas import YumaSimulationNames
 
 yumas_dict = asdict(YumaSimulationNames())
 
+#do not enable user to pick alpha version - it happens with a checkbox boolean
+del yumas_dict["YUMA_LIQUID"]
+del yumas_dict["YUMA4_LIQUID"]
 
 class SimulationHyperparametersForm(forms.Form):
     kappa = forms.FloatField(initial=0.5)
     bond_penalty = forms.FloatField(initial=1.0)
+    reset_bonds = forms.BooleanField(
+        required=False, 
+        initial=False, 
+        label="Enable Reset Bonds"
+    )
 
 
 class YumaParamsForm(forms.Form):
-    bond_alpha = forms.FloatField(initial=0.1)
+    bond_moving_avg = forms.FloatField(initial=0.975)
     liquid_alpha = forms.BooleanField(required=False, initial=False)
-    alpha_high = forms.FloatField(initial=0.9)
-    alpha_low = forms.FloatField(initial=0.7)
+    alpha_high = forms.FloatField(initial=0.3)
+    alpha_low = forms.FloatField(initial=0.1)
     decay_rate = forms.FloatField(initial=0.1)
     capacity_alpha = forms.FloatField(initial=0.1)
+    alpha_sigmoid_steepness = forms.FloatField(initial=10.0)
     override_consensus_high = forms.FloatField(required=False)
     override_consensus_low = forms.FloatField(required=False)
 
