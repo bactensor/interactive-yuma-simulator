@@ -18,6 +18,15 @@ class SimulationHyperparametersForm(forms.Form):
         initial=False, 
         label="Enable Reset Bonds"
     )
+    liquid_alpha_consensus_mode = forms.ChoiceField(
+        choices=[
+            ("CURRENT", "CURRENT"),
+            ("PREVIOUS", "PREVIOUS"),
+            ("MIXED", "MIXED"),
+        ],
+        initial="CURRENT",
+        label="Liquid Alpha Consensus Mode"
+    )
 
 
 class YumaParamsForm(forms.Form):

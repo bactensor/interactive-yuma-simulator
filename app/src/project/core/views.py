@@ -31,6 +31,7 @@ def simulation_view(request):
         sim_params = SimulationHyperparameters(
             kappa=hyper_data["kappa"],
             bond_penalty=hyper_data["bond_penalty"],
+            liquid_alpha_consensus_mode=hyper_data["liquid_alpha_consensus_mode"],
         )
 
         # Create YumaParams object
