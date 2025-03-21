@@ -3386,7 +3386,7 @@ dependencies = [
     "widgetsnbextension==4.0.13",
 ]
 files = [
-    {file = "yuma_simulation-0.1.0-py3-none-any.whl", hash = "sha256:8a3b6c6fd3519460dc2cbf475d64c6409a1203f20f99bfb5076599f81c29e937"},
+    {file = "yuma_simulation-0.1.0-py3-none-any.whl", hash = "sha256:196cab106a9bca91e5fce1cf5a534b42482be7c6a05e2b980378f938c91b34ed"},
 ]
 
 [[package]]
