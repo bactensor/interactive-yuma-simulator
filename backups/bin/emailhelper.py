@@ -58,6 +58,14 @@ def parse_arguments():
     )
 
     parser.add_argument(
+        "--from",
+        required=False,
+        default="",
+        dest="from_email",
+        help="Sender address",
+    )
+
+    parser.add_argument(
         "-f",
         "--files",
         action="store",
@@ -97,6 +105,8 @@ if __name__ == "__main__":
 
     addr_to = parser_result.to_email
     files = parser_result.files or []
+    if parser_result.from_email:
+        addr_form = parser_result.from_email
     if "@" in email_creds.username:
         addr_from = email_creds.username
     else:

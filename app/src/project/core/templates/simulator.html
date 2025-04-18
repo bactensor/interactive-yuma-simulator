@@ -97,7 +97,6 @@
       max-width: 80%;
     }
 
-    /* A bit of styling for each case container so there's a visible separation */
     .case-container {
       margin-bottom: 40px;
       border-bottom: 1px solid #ccc;
@@ -131,14 +130,12 @@
       </form>
     </div>
 
-    <!-- Results Section -->
     <div class="results-section">
       {% if valid_forms %}
         <h2>Results</h2>
         <div class="scrollable-div">
           <div class="chart-wrapper" id="chartWrapper">
             <p>Loading charts for each selected case... <br/>
-               <!-- Note: fetch is happening *sequentially* now. -->
             </p>
           </div>
         </div>
@@ -196,44 +193,30 @@
 
     window.addEventListener("load", () => {
       if (validForms) {
-        fetchAllCasesSequential();
+        fetchAllCasesParallel();
       }
     });
 
-
-    // NEW or CHANGED: The function below fetches cases one by one (sequential).
-    async function fetchAllCasesSequential() {
-      // 1) Clear out any old results
+    async function fetchAllCasesParallel() {
       const chartWrapper = document.getElementById("chartWrapper");
       chartWrapper.innerHTML = "";
 
-      // 2) Sort the cases by numeric ID if you want that order
-      const sortedCases = [...selectedCases].sort((a, b) => {
-        return parseCaseNumber(a) - parseCaseNumber(b);
-      });
+      const sortedCases = [...selectedCases].sort((a, b) =>
+        parseCaseNumber(a) - parseCaseNumber(b)
+      );
 
-      // We'll store partial HTML results in an array
-      const results = new Array(sortedCases.length).fill(null);
-
-      // Pre-extract simParams, yumaParams
       const simParams = yumasData.sim_params || {};
       const yumaParams = yumasData.yuma_params || {};
 
-      // We'll do a loop, but each iteration waits for fetch to complete
-      for (let i = 0; i < sortedCases.length; i++) {
-        const caseName = sortedCases[i];
-        
-        // Build the request URL
+      const fetchPromises = sortedCases.map(caseName => {
         const url = new URL("{% url 'simulate_single_case' %}", window.location.origin);
         url.searchParams.set("case_name", caseName);
         url.searchParams.set("kappa", simParams.kappa);
         url.searchParams.set("bond_penalty", simParams.bond_penalty);
         url.searchParams.set("reset_bonds", simParams.reset_bonds);
         url.searchParams.set("liquid_alpha_consensus_mode", simParams.liquid_alpha_consensus_mode);
-
         url.searchParams.set("selected_yuma_key", yumasData.selected_yuma_key);
         url.searchParams.set("chosen_yuma", yumasData.chosen_yuma);
-
         url.searchParams.set("bond_moving_avg", yumaParams.bond_moving_avg);
         url.searchParams.set("liquid_alpha", yumaParams.liquid_alpha);
         url.searchParams.set("alpha_high", yumaParams.alpha_high);
@@ -241,7 +224,6 @@
         url.searchParams.set("decay_rate", yumaParams.decay_rate);
         url.searchParams.set("capacity_alpha", yumaParams.capacity_alpha);
         url.searchParams.set("alpha_sigmoid_steepness", yumaParams.alpha_sigmoid_steepness);
-
         if (yumaParams.override_consensus_high !== null) {
           url.searchParams.set("override_consensus_high", yumaParams.override_consensus_high);
         }
@@ -249,37 +231,28 @@
           url.searchParams.set("override_consensus_low", yumaParams.override_consensus_low);
         }
 
-        try {
-          // 3) Do one fetch, wait for it
-          const response = await fetch(url);
-          if (!response.ok) {
-            throw new Error("Request failed: " + response.status);
-          }
-          const html = await response.text();
+        return fetch(url)
+          .then(res => {
+            if (!res.ok) throw new Error(`Status ${res.status}`);
+            return res.text();
+          })
+          .then(html => {
+            const safeId = caseName.replace(/\s+/g, "_");
+            return {
+              snippet: `
+                <div class="case-container" id="container_for_${safeId}">
+                  ${html}
+                </div>
+              `
+            };
+          })
+          .catch(err => ({ snippet: `<div style="color:red;">Error fetching '${caseName}': ${err.message}</div>` }));
+      });
 
-          // 4) Store snippet in results array
-          const safeId = caseName.replace(/\s+/g, "_");
-          results[i] = `
-            <div class="case-container" id="container_for_${safeId}">
-              <h3>${caseName}</h3>
-              ${html}
-            </div>
-          `;
+      const results = await Promise.all(fetchPromises);
 
-        } catch (err) {
-          // On error, store a helpful snippet
-          results[i] = `<div style="color:red;">
-            Error fetching case '${caseName}': ${err.message}
-          </div>`;
-        }
-      }
-
-      // 5) Once we've done them all sequentially, append them
-      chartWrapper.innerHTML = "";
-      for (let snippet of results) {
-        const containerDiv = document.createElement("div");
-        containerDiv.innerHTML = snippet;
-        chartWrapper.appendChild(containerDiv);
+      for (const { snippet } of results) {
+        chartWrapper.insertAdjacentHTML("beforeend", snippet);
       }
     }
   </script>

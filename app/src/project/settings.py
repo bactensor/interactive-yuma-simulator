@@ -9,6 +9,7 @@ from functools import wraps
 import environ
 import structlog
 
+
 root = environ.Path(__file__) - 2
 
 env = environ.Env(DEBUG=(bool, False))
@@ -171,6 +172,7 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
+
 # Internationalization
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"
@@ -193,6 +195,9 @@ if env.bool("HTTPS_REDIRECT", default=False) and not DEBUG:
     CSRF_COOKIE_SECURE = True
 else:
     SECURE_SSL_REDIRECT = False
+
+
+
 
 EMAIL_BACKEND = env("EMAIL_BACKEND")
 EMAIL_FILE_PATH = env("EMAIL_FILE_PATH")
@@ -247,6 +252,11 @@ LOGGING = {
         "psycopg.pq": {
             # only logs unavailable libs during psycopg initialization
             "propagate": False,
+        },
+        # Fix spamming DEBUG-level logs in manage.py shell and shell_plus.
+        "parso": {
+            "handlers": ["console"],
+            "level": "INFO",
         },
     },
 }

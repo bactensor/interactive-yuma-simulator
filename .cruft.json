@@ -1,6 +1,6 @@
 {
   "template": "https://github.com/reef-technologies/cookiecutter-rt-django",
-  "commit": "6a881c85a8bf2da60c560ab64b6de863a07aa9a8",
+  "commit": "20ee2c1e068ab928d7028065559ab46e45eb123f",
   "checkout": null,
   "context": {
     "cookiecutter": {
@@ -14,6 +14,8 @@
       "log_aggregating": "n",
       "log_aggregator_url": "https://loki.reef.pl",
       "postgres_user": "postgres",
+      "use_valkey": "y",
+      "use_rest_framework": "n",
       "use_celery": "n",
       "use_flower": "n",
       "use_fingerprinting": "n",
@@ -21,6 +23,7 @@
       "use_allauth": "n",
       "allauth_trust_external_emails": "n",
       "allauth_providers": "google",
+      "vulnerabilities_scanning": "y",
       "sentry_dsn": "",
       "csp_enabled": "n",
       "csp_report_only": "n",
@@ -58,6 +61,10 @@
       "_copy_without_render": [
         ".github/workflows/cruft-updates.yml"
       ],
+      "_jinja2_env_vars": {
+        "trim_blocks": true,
+        "lstrip_blocks": true
+      },
       "_template": "https://github.com/reef-technologies/cookiecutter-rt-django"
     }
   },

@@ -8,7 +8,7 @@ Interactive Yuma Consensus Simulator
 
 - docker with [compose plugin](https://docs.docker.com/compose/install/linux/)
 - python 3.11
-- [pdm](https://pdm-project.org)
+- [uv](https://docs.astral.sh/uv/)
 - [nox](https://nox.thea.codes)
 
 # Setup development environment
@@ -17,9 +17,9 @@ Interactive Yuma Consensus Simulator
 ./setup-dev.sh
 docker compose up -d
 cd app/src
-pdm run manage.py wait_for_database --timeout 10
-pdm run manage.py migrate
-pdm run manage.py runserver
+uv run manage.py wait_for_database --timeout 10
+uv run manage.py migrate
+uv run manage.py runserver
 ```
 
 # Setup production environment (git deployment)
@@ -105,9 +105,6 @@ git push --force production local-branch-to-deploy:master
 
 
 
-
-
-
 # Cloud deployment
 
 ## AWS
@@ -146,46 +143,68 @@ For more details see [README_vultr.md](README_vultr.md).
 <details>
 <summary>Click to for backup setup & recovery information</summary>
 
-## Setting up periodic backups
+Backups are managed by `backups` container.
 
-Add to crontab:
+## Local volume
 
-```sh
-# crontab -e
-30 0 * * * cd ~/domains/interactive_yuma_simulator && ./bin/backup-db.sh > ~/backup.log 2>&1
-```
+By default, backups will be created [periodically](backups/backup.cron) and stored in `backups` volume.
 
-Set `BACKUP_LOCAL_ROTATE_KEEP_LAST` to keep only a specific number of most recent backups in local `.backups` directory.
+### Backups rotation
+Set env var:
+- `BACKUP_LOCAL_ROTATE_KEEP_LAST`
 
-## Configuring offsite targets for backups
+### Email
 
-Backups are put in `.backups` directory locally, additionally then can be stored offsite in following ways:
-
-**Backblaze**
-
-Set in `.env` file:
-
-- `BACKUP_B2_BUCKET_NAME`
-- `BACKUP_B2_KEY_ID`
-- `BACKUP_B2_KEY_SECRET`
-
-**Email**
-
-Set in `.env` file:
-
+Local backups may be sent to email manually. Set env vars:
 - `EMAIL_HOST`
 - `EMAIL_PORT`
 - `EMAIL_HOST_USER`
 - `EMAIL_HOST_PASSWORD`
-- `EMAIL_TARGET`
+- `DEFAULT_FROM_EMAIL`
+
+Then run:
+```sh
+docker compose run --rm -e EMAIL_TARGET=youremail@domain.com backups ./backup-db.sh
+```
+
+## B2 cloud storage
+
+Create an application key with restricted access to a single bucket. The key should have following permissions:
+- `listFiles`
+- `readFiles`
+- `writeFiles`
+
+Set env vars:
+- `BACKUP_B2_BUCKET`
+- `BACKUP_B2_KEY_ID`
+- `BACKUP_B2_KEY_SECRET`
+
+Backups will be uploaded to the bucket.
+
+Set up backups lifecycle rules by following these instructions: https://www.backblaze.com/docs/cloud-storage-configure-and-manage-lifecycle-rules
+
+## List all available backups
+
+```sh
+docker compose run --rm backups ./list-backups.sh
+```
 
 ## Restoring system from backup after a catastrophical failure
 
 1. Follow the instructions above to set up a new production environment
-2. Restore the database using bin/restore-db.sh
+2. Restore the database using one of
+```sh
+docker compose run --rm backups ./restore-db.sh /var/backups/{backup-name}.dump.zstd
+
+docker compose run --rm backups ./restore-db.sh b2://{bucket-name}/{backup-name}.dump.zstd
+docker compose run --rm backups ./restore-db.sh b2id://{ID}
+```
 3. See if everything works
-4. Set up backups on the new machine
-5. Make sure everything is filled up in .env, error reporting integration, email accounts etc
+4. Make sure everything is filled up in `.env`, error reporting integration, email accounts etc
+
+## Monitoring
+
+`backups` container runs a simple server which [exposes essential metrics about backups](backups/bin/serve_metrics.py).
 
 </details>
 
