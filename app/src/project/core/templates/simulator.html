@@ -61,7 +61,7 @@
     /* Toggle arrow button */
     .toggle-btn {
       position: fixed;
-      top: 50vh; /* fixed vertically at the viewport’s center */
+      top: 50vh;
       transform: translate(-50%, -50%);
       z-index: 1000;
       background-color: #007BFF;
@@ -86,18 +86,22 @@
       flex: 1 1 100%;
     }
 
-    /* --- ADDED: Center the charts in collapsed mode --- */
-    /* Default (expanded): left-aligned (or unchanged) */
     .chart-wrapper {
       margin: 0;
       text-align: left;
     }
-    /* When container is collapsed, center the .chart-wrapper */
     .container.collapsed .results-section .chart-wrapper {
-      margin: 0 auto;        /* center horizontally */
-      text-align: center;    /* center any inline elements inside */
-      display: block;        /* ensure margin auto works for block elements */
-      max-width: 80%;        /* optional: limit width so it doesn't stretch too wide */
+      margin: 0 auto;
+      text-align: center;
+      display: block;
+      max-width: 80%;
+    }
+
+    /* A bit of styling for each case container so there's a visible separation */
+    .case-container {
+      margin-bottom: 40px;
+      border-bottom: 1px solid #ccc;
+      padding-bottom: 20px;
     }
   </style>
 </head>
@@ -129,11 +133,13 @@
 
     <!-- Results Section -->
     <div class="results-section">
-      {% if chart_table_html %}
+      {% if valid_forms %}
         <h2>Results</h2>
         <div class="scrollable-div">
-          <div class="chart-wrapper">
-            {{ chart_table_html|safe }}
+          <div class="chart-wrapper" id="chartWrapper">
+            <p>Loading charts for each selected case... <br/>
+               <!-- Note: fetch is happening *sequentially* now. -->
+            </p>
           </div>
         </div>
       {% else %}
@@ -147,17 +153,13 @@
 
   <script>
     function updateArrowPosition() {
-      // Get container's dimensions.
       const container = document.getElementById("main-container");
       const toggleBtn = document.getElementById("toggleBtn");
       const containerRect = container.getBoundingClientRect();
-      // Our container has 20px padding on left and right.
-      // When expanded, the left panel is 30% of (container width - 40px).
       if (!container.classList.contains("collapsed")) {
         const newLeft = containerRect.left + 20 + ((containerRect.width - 40) * 0.3);
         toggleBtn.style.left = newLeft + "px";
       } else {
-        // When collapsed, stick the arrow to the left container padding.
         const newLeft = containerRect.left + 20;
         toggleBtn.style.left = newLeft + "px";
       }
@@ -166,21 +168,120 @@
     function togglePanel() {
       const container = document.getElementById("main-container");
       const toggleBtn = document.getElementById("toggleBtn");
-      // Toggle collapsed state.
       if (container.classList.contains("collapsed")) {
         container.classList.remove("collapsed");
-        toggleBtn.innerHTML = "&#9664;"; // left arrow: click to collapse.
+        toggleBtn.innerHTML = "&#9664;";
       } else {
         container.classList.add("collapsed");
-        toggleBtn.innerHTML = "&#9654;"; // right arrow: click to expand.
+        toggleBtn.innerHTML = "&#9654;";
       }
-      // Update arrow position immediately.
       updateArrowPosition();
     }
     
-    // Update arrow on load and resize.
     window.addEventListener("load", updateArrowPosition);
     window.addEventListener("resize", updateArrowPosition);
+
+    // Convert valid_forms to a boolean
+    const validFormsString = "{{ valid_forms|yesno:'true,false' }}";
+    const validForms = (validFormsString === "true");
+
+    // Parse as JSON
+    const selectedCases = JSON.parse('{{ cases_json|escapejs }}');
+    const yumasData = JSON.parse('{{ yumas_json|escapejs }}');
+
+    function parseCaseNumber(caseName) {
+      const match = caseName.match(/^Case\s+(\d+)/i);
+      return match ? parseInt(match[1], 10) : 999999;
+    }
+
+    window.addEventListener("load", () => {
+      if (validForms) {
+        fetchAllCasesSequential();
+      }
+    });
+
+
+    // NEW or CHANGED: The function below fetches cases one by one (sequential).
+    async function fetchAllCasesSequential() {
+      // 1) Clear out any old results
+      const chartWrapper = document.getElementById("chartWrapper");
+      chartWrapper.innerHTML = "";
+
+      // 2) Sort the cases by numeric ID if you want that order
+      const sortedCases = [...selectedCases].sort((a, b) => {
+        return parseCaseNumber(a) - parseCaseNumber(b);
+      });
+
+      // We'll store partial HTML results in an array
+      const results = new Array(sortedCases.length).fill(null);
+
+      // Pre-extract simParams, yumaParams
+      const simParams = yumasData.sim_params || {};
+      const yumaParams = yumasData.yuma_params || {};
+
+      // We'll do a loop, but each iteration waits for fetch to complete
+      for (let i = 0; i < sortedCases.length; i++) {
+        const caseName = sortedCases[i];
+        
+        // Build the request URL
+        const url = new URL("{% url 'simulate_single_case' %}", window.location.origin);
+        url.searchParams.set("case_name", caseName);
+        url.searchParams.set("kappa", simParams.kappa);
+        url.searchParams.set("bond_penalty", simParams.bond_penalty);
+        url.searchParams.set("reset_bonds", simParams.reset_bonds);
+        url.searchParams.set("liquid_alpha_consensus_mode", simParams.liquid_alpha_consensus_mode);
+
+        url.searchParams.set("selected_yuma_key", yumasData.selected_yuma_key);
+        url.searchParams.set("chosen_yuma", yumasData.chosen_yuma);
+
+        url.searchParams.set("bond_moving_avg", yumaParams.bond_moving_avg);
+        url.searchParams.set("liquid_alpha", yumaParams.liquid_alpha);
+        url.searchParams.set("alpha_high", yumaParams.alpha_high);
+        url.searchParams.set("alpha_low", yumaParams.alpha_low);
+        url.searchParams.set("decay_rate", yumaParams.decay_rate);
+        url.searchParams.set("capacity_alpha", yumaParams.capacity_alpha);
+        url.searchParams.set("alpha_sigmoid_steepness", yumaParams.alpha_sigmoid_steepness);
+
+        if (yumaParams.override_consensus_high !== null) {
+          url.searchParams.set("override_consensus_high", yumaParams.override_consensus_high);
+        }
+        if (yumaParams.override_consensus_low !== null) {
+          url.searchParams.set("override_consensus_low", yumaParams.override_consensus_low);
+        }
+
+        try {
+          // 3) Do one fetch, wait for it
+          const response = await fetch(url);
+          if (!response.ok) {
+            throw new Error("Request failed: " + response.status);
+          }
+          const html = await response.text();
+
+          // 4) Store snippet in results array
+          const safeId = caseName.replace(/\s+/g, "_");
+          results[i] = `
+            <div class="case-container" id="container_for_${safeId}">
+              <h3>${caseName}</h3>
+              ${html}
+            </div>
+          `;
+
+        } catch (err) {
+          // On error, store a helpful snippet
+          results[i] = `<div style="color:red;">
+            Error fetching case '${caseName}': ${err.message}
+          </div>`;
+        }
+      }
+
+      // 5) Once we've done them all sequentially, append them
+      chartWrapper.innerHTML = "";
+      for (let snippet of results) {
+        const containerDiv = document.createElement("div");
+        containerDiv.innerHTML = snippet;
+        chartWrapper.appendChild(containerDiv);
+      }
+    }
   </script>
 
 </body>
