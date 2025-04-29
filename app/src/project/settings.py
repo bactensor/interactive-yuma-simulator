@@ -69,6 +69,8 @@ INSTALLED_APPS = [
     "django_structlog",
     "constance",
     "project.core",
+    "crispy_forms",
+    "crispy_bootstrap5",
 ]
 
 
@@ -303,3 +305,6 @@ if SENTRY_DSN := env("SENTRY_DSN", default=""):
         ],
     )
     ignore_logger("django.security.DisallowedHost")
+
+CRISPY_ALLOWED_TEMPLATE_PACKS = "bootstrap5"
+CRISPY_TEMPLATE_PACK = "bootstrap5"

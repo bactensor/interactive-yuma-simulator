@@ -1,5 +1,4 @@
 version = 1
-revision = 1
 requires-python = "==3.11.*"
 
 [[package]]
@@ -441,6 +440,19 @@ wheels = [
 ]
 
 [[package]]
+name = "crispy-bootstrap5"
+version = "2025.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "django" },
+    { name = "django-crispy-forms" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/59/65/d4406d4c914aedea8e2de9cf44d70bd1f6e339c87ef2d5791ff10fa223d2/crispy_bootstrap5-2025.4.tar.gz", hash = "sha256:d675ea7e245048905077dfe16bf1fa1ee16842f52fe88164ccc8a5e2d11119b3", size = 23913 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b8/9a/4f1166cc82c9f777cf9a5bc2a75171d63301ac317c5de8f59bd44bfe2b7a/crispy_bootstrap5-2025.4-py3-none-any.whl", hash = "sha256:51efa19c7d40e339774a6fe23407e83b95b7634cad6de70fd1f1093131bea1d9", size = 24772 },
+]
+
+[[package]]
 name = "cryptography"
 version = "44.0.2"
 source = { registry = "https://pypi.org/simple" }
@@ -601,6 +613,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/93/6c/16f6cb6064c63074fd5b2bd494eb319afd846236d9c1a6c765946df2c289/django_cors_headers-4.7.0.tar.gz", hash = "sha256:6fdf31bf9c6d6448ba09ef57157db2268d515d94fc5c89a0a1028e1fc03ee52b", size = 21037 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7e/a2/7bcfff86314bd9dd698180e31ba00604001606efb518a06cca6833a54285/django_cors_headers-4.7.0-py3-none-any.whl", hash = "sha256:f1c125dcd58479fe7a67fe2499c16ee38b81b397463cf025f0e2c42937421070", size = 12794 },
+]
+
+[[package]]
+name = "django-crispy-forms"
+version = "2.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "django" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/88/a1/ffd7b0e160296121d88e3e173165370000ee4de7328f5c4f4b266638dcd9/django_crispy_forms-2.4.tar.gz", hash = "sha256:915e1ffdeb2987d78b33fabfeff8e5203c8776aa910a3a659a2c514ca125f3bd", size = 278932 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1d/ec/a25f81e56a674e63cf6c3dd8e36b1b3fecc238fecd6098504adc0cc61402/django_crispy_forms-2.4-py3-none-any.whl", hash = "sha256:5a4b99876cfb1bdd3e47727731b6d4197c51c0da502befbfbec6a93010b02030", size = 31446 },
 ]
 
 [[package]]
@@ -882,10 +906,12 @@ dependencies = [
     { name = "celery" },
     { name = "channels", extra = ["daphne"] },
     { name = "channels-redis" },
+    { name = "crispy-bootstrap5" },
     { name = "django" },
     { name = "django-business-metrics" },
     { name = "django-constance" },
     { name = "django-cors-headers" },
+    { name = "django-crispy-forms" },
     { name = "django-csp" },
     { name = "django-debug-toolbar" },
     { name = "django-environ" },
@@ -918,10 +944,12 @@ requires-dist = [
     { name = "celery", specifier = ">=5.4.0" },
     { name = "channels", extras = ["daphne"], specifier = ">=4.2.0" },
     { name = "channels-redis", specifier = ">=4.2.1" },
+    { name = "crispy-bootstrap5", specifier = ">=2025.4" },
     { name = "django", specifier = ">=5.1.4" },
     { name = "django-business-metrics", specifier = ">=1.0.1" },
     { name = "django-constance", extras = ["database"], specifier = ">=4.1.3" },
     { name = "django-cors-headers", specifier = ">=4.6.0" },
+    { name = "django-crispy-forms", specifier = ">=2.4" },
     { name = "django-csp", specifier = ">=3.8" },
     { name = "django-debug-toolbar", specifier = ">=4.4.6" },
     { name = "django-environ", specifier = ">=0.11.2" },
