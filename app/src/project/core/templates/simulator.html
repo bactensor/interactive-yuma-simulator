@@ -385,7 +385,11 @@
           <div class="card-body p-0">
               <div id="chartWrapper" class="p-4">
                 {% if valid_forms %}
-                  <p>Loading charts…</p>
+                  <div class="text-center">
+                    <div class="spinner-border" role="status">
+                      <span class="visually-hidden">Loading...</span>
+                    </div>
+                  </div>
                 {% else %}
                   <p class="text-muted">No results yet. Select options and hit Generate.</p>
                 {% endif %}
@@ -417,7 +421,6 @@
 
     async function fetchAllCasesParallel() {
       const chartWrapper = document.getElementById("chartWrapper");
-      chartWrapper.innerHTML = "";
 
       const sortedCases = [...selectedCases].sort((a, b) =>
         parseCaseNumber(a) - parseCaseNumber(b)
@@ -474,7 +477,7 @@
       });
 
       const results = await Promise.all(fetchPromises);
-
+      chartWrapper.innerHTML = "";
       for (const { snippet } of results) {
         chartWrapper.insertAdjacentHTML("beforeend", snippet);
       }
