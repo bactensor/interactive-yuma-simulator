@@ -255,6 +255,74 @@
         chartWrapper.insertAdjacentHTML("beforeend", snippet);
       }
     }
+
+  // AI GENERATED STUFF AHEAD - consider review and refactor :)
+  // Utility: build a query string from a form element
+  function serializeForm(form) {
+    const params = new URLSearchParams();
+    // All inputs, selects, checkboxes
+    new FormData(form).forEach((value, key) => {
+      // For checkboxes with same name, FormData correctly aggregates multiple entries
+      params.append(key, value);
+    });
+    return params.toString();
+  }
+
+  // Apply query params to the form so that each control is set
+  function populateFormFromURL(form) {
+    const params = new URLSearchParams(window.location.search);
+    for (const [key, value] of params.entries()) {
+      const control = form.elements[key];
+      if (!control) continue;
+      if (control.type === 'checkbox') {
+        control.checked = true;
+      } else if (control.multiple) {
+        // <select multiple>
+        Array.from(control.options).forEach(opt => {
+          opt.selected = params.getAll(key).includes(opt.value);
+        });
+      } else {
+        control.value = value;
+      }
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const form = document.querySelector('form[method="get"]');
+
+    // 1. On page load: populate form, then fetch charts if there's any query
+    populateFormFromURL(form);
+    if (window.location.search.length > 0) {
+      // Avoid double-fetch: mark forms valid
+      window.validFormsString = "true";
+      fetchAllCasesParallel();
+    }
+
+    // 2. Intercept submit
+    form.addEventListener('submit', e => {
+      e.preventDefault();
+
+      // 2a. Serialize form → query string
+      const qs = serializeForm(form);
+
+      // 2b. Update URL (push a new history entry)
+      const newURL = window.location.pathname + '?' + qs;
+      history.pushState(null, '', newURL);
+
+      // 2c. Trigger your AJAX loader
+      fetchAllCasesParallel();
+    });
+
+    // 3. Handle back/forward navigation
+    window.addEventListener('popstate', () => {
+      // Repopulate form and reload the charts
+      populateFormFromURL(form);
+      fetchAllCasesParallel();
+    });
+  });
+
+  // AI GENERATED STUFF ENDS HERE
+
   </script>
 
 </body>
