@@ -10,8 +10,9 @@ from yuma_simulation._internal.cases import cases
 from yuma_simulation._internal.yumas import YumaSimulationNames
 
 yumas_dict = asdict(YumaSimulationNames())
-# hide alpha version behind a boolean toggle
-del yumas_dict["YUMA_LIQUID"]
+
+#do not enable user to pick alpha version - it happens with a checkbox boolean
+del yumas_dict["YUMA3_LIQUID"]
 
 
 # WRANING: Rrefactored to cripsy forms by AI - review and maybe refactor
