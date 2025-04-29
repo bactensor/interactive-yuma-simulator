@@ -111,16 +111,20 @@
 
 /* smaller than 900px: let auto-fit do its thing (will only ever fit 1 column because 2×450px=900px) */
 @media (max-width: 1349px) {
-  #chartWrapper {
+  #chartWrapper:not(.force-one) {
     grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
   }
 }
 
 /* 900px and up: exactly two columns */
 @media (min-width: 1350px) {
-  #chartWrapper {
+  #chartWrapper:not(.force-one) {
     grid-template-columns: repeat(2, minmax(450px, 1fr));
   }
+}
+
+#chartWrapper.force-one {
+  grid-template-columns: repeat(1, minmax(450px,1fr)) !important;
 }
 
 .case-container {
@@ -369,6 +373,14 @@
               <h5 class="mb-0">Charts</h5>
             </div>
 
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" role="switch"
+                     id="colSwitch">
+              <label class="form-check-label" for="colSwitch">
+                One column
+              </label>
+            </div>
+
           </div>
           <div class="card-body p-0">
               <div id="chartWrapper" class="p-4">
@@ -487,6 +499,25 @@
 
       // —OR— if you’re using your AJAX loader instead:
       // fetchAllCasesParallel();
+    });
+
+    document.addEventListener('DOMContentLoaded', () => {
+      const switchEl = document.getElementById('colSwitch');
+      const wrapper  = document.getElementById('chartWrapper');
+      const STORAGE_KEY = 'forceOneColumn';
+
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored === 'true') {
+        switchEl.checked = true;
+        wrapper.classList.add('force-one');
+      }
+
+      switchEl.addEventListener('change', () => {
+        const on = switchEl.checked;
+        if (on) wrapper.classList.add('force-one');
+        else    wrapper.classList.remove('force-one');
+        localStorage.setItem(STORAGE_KEY, on);
+      });
     });
 
   </script>
