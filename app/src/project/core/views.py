@@ -1,9 +1,12 @@
 import json
 import traceback
+import re
 
 from django.shortcuts import render
 from django.http import HttpResponse
 from dataclasses import asdict
+
+import pandas as pd
 
 from .forms import SelectionForm, SimulationHyperparametersForm, YumaParamsForm
 
@@ -14,6 +17,7 @@ from yuma_simulation._internal.yumas import (
     YumaSimulationNames
 )
 from yuma_simulation.v1.api import generate_chart_table
+from yuma_simulation.v1 import api as yuma_api
 
 def simulation_view(request):
     selection_form = SelectionForm(request.GET or None)
@@ -131,3 +135,51 @@ def simulate_single_case_view(request):
         return HttpResponse(f"Error generating chart: {str(e)}", status=500)
 
     return HttpResponse(partial_html.data if partial_html else "No data", status=200)
+
+
+def bootstrap_generate_ipynb_table(
+    table_data: dict[str, list[str]],
+    summary_table: pd.DataFrame | None,
+    case_row_ranges: list[tuple[int,int,int]],
+) -> str:
+    if summary_table is None:
+        summary_table = pd.DataFrame(table_data)
+
+    # helper: extract just the src URL from the <img> tag
+    def parse_img_src(html_str: str) -> str:
+        m = re.search(r'src="([^"]+)"', html_str)
+        return m.group(1) if m else ""
+
+    rows = []
+    num_rows = len(summary_table)
+
+    for i in range(num_rows):
+        # figure out which case this row belongs to
+        case_name = next(
+            (summary_table.columns[c_idx]
+             for start, end, c_idx in case_row_ranges
+             if start <= i <= end),
+            summary_table.columns[0]
+        )
+
+        raw_img_tag = summary_table.at[i, case_name]
+        img_src = parse_img_src(raw_img_tag)
+
+        # full-width, single-row layout:
+        rows.append(f"""
+          <div class="mb-4 text-center">
+            <img src="{img_src}"
+                 class="img-fluid w-100"
+                 alt="Chart for {case_name}">
+          </div>
+        """)
+
+    # wrap everything in a single container
+    return f"""
+    <div class="container-fluid px-3">
+      {''.join(rows)}
+    </div>
+    """
+
+# Now override the external lib’s function:
+yuma_api._generate_ipynb_table = bootstrap_generate_ipynb_table

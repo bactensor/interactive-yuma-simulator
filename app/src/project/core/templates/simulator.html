@@ -102,6 +102,88 @@
   background-color: #e9ecef; /* match native disabled bg */
 }
 
+
+#chartWrapper {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(700px, 1fr));
+  gap: 2rem;                /* space between cards */
+  align-items: start;       /* line up the tops */
+}
+
+.case-container {
+  margin-bottom: 2rem;  /* extra space below each chart/card */
+}
+
+/* ----------------------------
+   DESKTOP / LARGE (md+) 
+   Sidebar “fixed” + self-scrolling
+   ---------------------------- */
+@media (min-width: 768px) {
+  /* pin the sidebar to the left, full‐height */
+  #sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 25%;            /* or whatever your grid uses (col-3 of 12 = 25%) */
+    z-index: 100;          /* above page content, below modals/toolbars */
+    overflow: visible;     /* let the card’s shadow show */
+  }
+
+  /* make the card fill that container*/
+  #sidebar .card {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1),
+                0 2px 4px rgba(0,0,0,0.06);
+  }
+
+  /* only the body scrolls if content overflows */
+  #sidebar .card-body {
+    flex: 1 1 auto;
+    overflow-y: auto;
+  }
+}
+
+/* ----------------------------
+   MOBILE / SMALL (sm and down)
+   Sidebar scrolls with page
+   ---------------------------- */
+@media (max-width: 767.98px) {
+  #sidebar {
+    position: static;      /* back to normal flow */
+    width: 100%;
+  }
+  #sidebar .card {
+    height: auto;
+  }
+  #sidebar .card-body {
+    overflow-y: visible;   /* page handles scrolling */
+  }
+}
+
+
+@media (min-width: 768px) {
+  /* Define your sidebar width once */
+  :root {
+    --sidebar-width: 25%;   /* or whatever col-md-width you chose */
+  }
+
+  /* When sidebar is visible, push results over */
+  #sidebar:not(.collapsed) ~ section,
+  #sidebar:not(.collapsed) + .results-panel {
+    margin-left: var(--sidebar-width);
+    transition: margin-left 0.3s ease;
+  }
+
+  /* When sidebar is hidden (collapsed), reset margin */
+  #sidebar.collapsed ~ section,
+  #sidebar.collapsed + .results-panel {
+    margin-left: 0;
+  }
+}
+
 </style>
 <body>
 
@@ -110,9 +192,9 @@
 
       <!-- Input Panel -->
       <aside id="sidebar" class="col-12 col-md-4 col-lg-3 mb-4">
-        <div class="card h-100">
+        <div class="card shadow h-100">
           <div class="card-header d-flex align-items-center justify-content-between"
-               style="position: sticky; top: 0; z-index: 10; background: #fff;">
+               style="position: sticky; top: 0; z-index: 10; background: #f5f5f5;">
             <h5 class="mb-0">Yuma Simulation</h5>
             <!-- sim-toggle: always visible on small, only on md+ when expanded -->
             <button type="button"
@@ -224,50 +306,44 @@
                 </div>
 
               </div>
-              <button type="submit" class="btn btn-primary btn-lg w-100">Generate</button>
+
             </form>
+          </div>
+          <div class="card-footer bg-light">
+            <!-- full-width generate button -->
+            <button type="submit"
+                    id="generateBtnFooter"
+                    form="simulationForm"
+                    class="btn btn-primary w-100">
+              Generate
+            </button>
           </div>
         </div>
       </aside>
 
       <!-- Results Panel -->
       <section id="results" class="col-12 col-md-8 col-lg-9 mb-4">
-        <div class="card h-100">
-          <div class="card-header d-flex justify-content-between align-items-center"
-               style="position: sticky; top: 0; z-index: 10; background: #fff;">
+        <div class="card shadow-sm h-100">
+          <div id="resultsHeader" class="card-header d-flex justify-content-between align-items-center"
+               style="position: sticky; top: 0; z-index: 10; background: #f5f5f5;">
             <div class="d-flex align-items-center">
               <!-- collapse/unfold toggle if visible -->
               <button class="res-toggle btn btn-sm btn-outline-secondary me-2 d-none"
                       aria-label="Toggle sidebar">
                 <i class="bi bi-chevron-right"></i>
               </button>
-              <h5 class="mb-0">Charts &nbsp;</h5>
-            <button id="generateBtnHeader"
-                    type="button"
-                    class="btn btn-primary btn-sm">
-              Generate
-            </button>
+              <h5 class="mb-0">Charts</h5>
             </div>
-
-            <!-- If we want GENERATE button, inline on the right just put it here
-            <button id="generateBtnHeader"
-                    type="button"
-                    class="btn btn-primary btn-sm">
-              Generate
-            </button>
-            -->
 
           </div>
           <div class="card-body p-0">
-            <div class="table-responsive" style="height: calc(100vh - 200px); overflow:auto;">
-              <div id="chartWrapper" class="p-3">
+              <div id="chartWrapper" class="p-4">
                 {% if valid_forms %}
                   <p>Loading charts…</p>
                 {% else %}
                   <p class="text-muted">No results yet. Select options and hit Generate.</p>
                 {% endif %}
               </div>
-            </div>
           </div>
         </div>
       </section>
@@ -334,10 +410,16 @@
           })
           .then(html => {
             const safeId = caseName.replace(/\s+/g, "_");
+            const yumaLabel = yumasData.chosen_yuma; // e.g. “Yuma 0 (subtensor)”
             return {
               snippet: `
-                <div class="case-container" id="container_for_${safeId}">
-                  ${html}
+                <div class="card shadow case-container mb-4" id="container_for_${safeId}">
+                  <div class="card-header">
+                    <strong>${caseName}</strong> — <small class="text-muted">${yumaLabel}</small>
+                  </div>
+                  <div class="card-body p-3">
+                    ${html}
+                  </div>
                 </div>
               `
             };
@@ -353,13 +435,19 @@
     }
 
     $(function(){
-      $('.selectpicker').selectpicker();
+      // this is a HACK - for fixed sidebar to work - we might want to drop fixed sidebar...
+      $('.selectpicker')
+        .selectpicker('destroy')
+        .selectpicker({
+          container: 'body',
+          dropupAuto: false   // optional: disable auto-flip into dropup
+        });
     });
 
-    const headerGenBtn = document.getElementById('generateBtnHeader');
+    const footerGenBtn = document.getElementById('generateBtnFooter');
     const mainForm     = document.querySelector('aside#sidebar form');
 
-    headerGenBtn.addEventListener('click', () => {
+    footerGenBtn.addEventListener('click', () => {
       // if you’re using normal GET + full-page reload:
       mainForm.requestSubmit();
 
