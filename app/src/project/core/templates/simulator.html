@@ -105,13 +105,28 @@
 
 #chartWrapper {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(700px, 1fr));
   gap: 2rem;                /* space between cards */
   align-items: start;       /* line up the tops */
 }
 
+/* smaller than 900px: let auto-fit do its thing (will only ever fit 1 column because 2×450px=900px) */
+@media (max-width: 1349px) {
+  #chartWrapper {
+    grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
+  }
+}
+
+/* 900px and up: exactly two columns */
+@media (min-width: 1350px) {
+  #chartWrapper {
+    grid-template-columns: repeat(2, minmax(450px, 1fr));
+  }
+}
+
 .case-container {
   margin-bottom: 2rem;  /* extra space below each chart/card */
+  max-width: 1200px;
+  width: 100%;
 }
 
 /* ----------------------------
@@ -125,7 +140,7 @@
     top: 0;
     left: 0;
     bottom: 0;
-    width: 25%;            /* or whatever your grid uses (col-3 of 12 = 25%) */
+    width: 33%;            /* or whatever your grid uses (col-3 of 12 = 25%) */
     z-index: 100;          /* above page content, below modals/toolbars */
     overflow: visible;     /* let the card’s shadow show */
   }
@@ -146,6 +161,18 @@
   }
 }
 
+@media (min-width: 992px) {
+  /* pin the sidebar to the left, full‐height */
+  #sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 25%;            /* or whatever your grid uses (col-3 of 12 = 25%) */
+    z-index: 100;          /* above page content, below modals/toolbars */
+    overflow: visible;     /* let the card’s shadow show */
+  }
+}
 /* ----------------------------
    MOBILE / SMALL (sm and down)
    Sidebar scrolls with page
@@ -167,7 +194,7 @@
 @media (min-width: 768px) {
   /* Define your sidebar width once */
   :root {
-    --sidebar-width: 25%;   /* or whatever col-md-width you chose */
+    --sidebar-width: 33%;   /* or whatever col-md-width you chose */
   }
 
   /* When sidebar is visible, push results over */
@@ -181,6 +208,13 @@
   #sidebar.collapsed ~ section,
   #sidebar.collapsed + .results-panel {
     margin-left: 0;
+  }
+}
+
+@media (min-width: 992px) {
+  /* Define your sidebar width once */
+  :root {
+    --sidebar-width: 25%;   /* or whatever col-md-width you chose */
   }
 }
 
