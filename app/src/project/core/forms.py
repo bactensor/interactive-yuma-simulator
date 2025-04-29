@@ -2,8 +2,9 @@ from dataclasses import asdict
 
 from django import forms
 from crispy_forms.helper import FormHelper
-from crispy_forms.layout import Layout, Field, Fieldset, Row, Column, Submit, Div
+from crispy_forms.layout import Layout, Field, Fieldset, Div
 from crispy_forms.bootstrap import InlineCheckboxes
+from crispy_bootstrap5.bootstrap5 import FloatingField
 
 from yuma_simulation._internal.cases import cases
 from yuma_simulation._internal.yumas import YumaSimulationNames
@@ -40,7 +41,7 @@ class SelectionForm(forms.Form):
         self.helper.disable_csrf = True
         self.helper.layout = Layout(
             Fieldset(
-                "Simulation Configuration",
+                "", # empty heading - set in template
                 # use Field instead of InlineCheckboxes
                 Field("selected_cases"),
                 Field("selected_yumas"),
@@ -67,15 +68,15 @@ class SimulationHyperparametersForm(forms.Form):
         self.helper.disable_csrf = True
         self.helper.layout = Layout(
           Fieldset(
-            "Hyperparameters",
-            Row(
-              Column('kappa', css_class="col-md-6"),
-              Column('bond_penalty', css_class="col-md-6"),
+            "", # empty heading - set in template
+            # each field on its own row
+            Div(
+              Field('kappa', wrapper_class='col-md-6 mb-3'),
+              Field('bond_penalty', wrapper_class='col-md-6 mb-3'),
+              css_class='row'
             ),
-            Row(
-              Column('reset_bonds', css_class="col-md-6"),
-              Column('liquid_alpha_consensus_mode', css_class="col-md-6"),
-            ),
+            Div(Field('reset_bonds',                css_class='mb-3'), css_class='row'),
+            Div(Field('liquid_alpha_consensus_mode',css_class='mb-3'), css_class='row'),
           )
         )
 
@@ -88,8 +89,6 @@ class YumaParamsForm(forms.Form):
     decay_rate       = forms.FloatField(initial=0.1)
     capacity_alpha   = forms.FloatField(initial=0.1)
     alpha_sigmoid_steepness = forms.FloatField(initial=10.0)
-    override_consensus_high  = forms.FloatField(required=False)
-    override_consensus_low   = forms.FloatField(required=False)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -99,21 +98,35 @@ class YumaParamsForm(forms.Form):
         self.helper.disable_csrf = True
         self.helper.layout = Layout(
           Fieldset(
-            "Yuma Parameters",
-            Row(
-              Column('bond_moving_avg', css_class="col-md-4"),
-              Column('alpha_high', css_class="col-md-4"),
-              Column('alpha_low', css_class="col-md-4"),
+            "", # empty heading - set in template
+
+            # bond_moving_avg & liquid_alpha side-by-side
+            Div(
+              Field('bond_moving_avg', wrapper_class='col-12 mb-3'),
+              Field('liquid_alpha',    wrapper_class='col-12 mb-3'),
+              css_class='row bond-liquid-group'
             ),
-            Row(
-              Column('decay_rate', css_class="col-md-4"),
-              Column('capacity_alpha', css_class="col-md-4"),
-              Column('alpha_sigmoid_steepness', css_class="col-md-4"),
+
+            # alpha_high & alpha_low side-by-side (shown when liquid_alpha is checked)
+            Div(
+              Field('alpha_high', wrapper_class='col-md-6 mb-3'),
+              Field('alpha_low',  wrapper_class='col-md-6 mb-3'),
+              css_class='row alpha-params-group'
             ),
-            Row(
-              Column('liquid_alpha', css_class="col-md-4"),
-              Column('override_consensus_high', css_class="col-md-4"),
-              Column('override_consensus_low', css_class="col-md-4"),
+
+            # alpha_sigmoid_steepness on its own row
+            Div(
+              Field('alpha_sigmoid_steepness', wrapper_class='col-12 mb-3'),
+              css_class='row alpha-params-group'
             ),
+
+            # decay_rate & capacity_alpha for special Yuma key
+            Div(
+              Field('decay_rate',     wrapper_class='col-md-6 mb-3'),
+              Field('capacity_alpha', wrapper_class='col-md-6 mb-3'),
+              css_class='row decay-capacity-group'
+            ),
+
+            # override fields are omitted entirely from the layout
           )
         )

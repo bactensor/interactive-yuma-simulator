@@ -60,8 +60,6 @@ def simulation_view(request):
             "decay_rate": yuma_data["decay_rate"],
             "capacity_alpha": yuma_data["capacity_alpha"],
             "alpha_sigmoid_steepness": yuma_data["alpha_sigmoid_steepness"],
-            "override_consensus_high": yuma_data["override_consensus_high"],
-            "override_consensus_low": yuma_data["override_consensus_low"],
         }
 
         yumas_json_data = {
@@ -100,11 +98,6 @@ def simulate_single_case_view(request):
         decay_rate = float(request.GET.get("decay_rate", 0.1))
         capacity_alpha = float(request.GET.get("capacity_alpha", 0.1))
         alpha_sigmoid_steepness = float(request.GET.get("alpha_sigmoid_steepness", 10.0))
-        o_chigh = request.GET.get("override_consensus_high")
-        o_clow = request.GET.get("override_consensus_low")
-
-        override_consensus_high = float(o_chigh) if o_chigh else None
-        override_consensus_low = float(o_clow) if o_clow else None
 
     except ValueError as e:
         return HttpResponse(f"Invalid parameter: {str(e)}", status=400)
@@ -123,8 +116,6 @@ def simulate_single_case_view(request):
         decay_rate=decay_rate,
         capacity_alpha=capacity_alpha,
         alpha_sigmoid_steepness=alpha_sigmoid_steepness,
-        override_consensus_high=override_consensus_high,
-        override_consensus_low=override_consensus_low,
     )
 
     package_cases = get_synthetic_cases(use_full_matrices=True, reset_bonds=reset_bonds)
