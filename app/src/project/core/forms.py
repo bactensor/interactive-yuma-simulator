@@ -7,8 +7,7 @@ from yuma_simulation._internal.yumas import YumaSimulationNames
 yumas_dict = asdict(YumaSimulationNames())
 
 #do not enable user to pick alpha version - it happens with a checkbox boolean
-del yumas_dict["YUMA_LIQUID"]
-# del yumas_dict["YUMA4_LIQUID"]
+del yumas_dict["YUMA3_LIQUID"]
 
 class SimulationHyperparametersForm(forms.Form):
     kappa = forms.FloatField(initial=0.5)
