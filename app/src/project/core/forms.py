@@ -2,7 +2,7 @@ from dataclasses import asdict
 
 from django import forms
 from crispy_forms.helper import FormHelper
-from crispy_forms.layout import Layout, Fieldset, Row, Column, Submit, Div
+from crispy_forms.layout import Layout, Field, Fieldset, Row, Column, Submit, Div
 from crispy_forms.bootstrap import InlineCheckboxes
 
 from yuma_simulation._internal.cases import cases
@@ -18,9 +18,15 @@ del yumas_dict["YUMA_LIQUID"]
 class SelectionForm(forms.Form):
     selected_cases = forms.MultipleChoiceField(
         choices=[(c.name, c.name) for c in cases],
-        widget=forms.CheckboxSelectMultiple,
         required=True,
         label="Select Cases",
+        widget=forms.SelectMultiple(attrs={
+            "class": "selectpicker form-control",
+            "multiple": "multiple",
+            "data-live-search": "true",
+            "data-actions-box": "true",             # adds “Select All” / “Deselect All”
+            "data-selected-text-format": "count > 3" # “3 of 18 selected” style
+        }),
     )
     selected_yumas = forms.ChoiceField(
         choices=[(k, v) for k, v in yumas_dict.items()],
@@ -30,14 +36,15 @@ class SelectionForm(forms.Form):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.helper = FormHelper(self)
-        self.helper.form_tag = False         # ← disable its <form> wrapper
+        self.helper.form_tag = False
         self.helper.disable_csrf = True
         self.helper.layout = Layout(
-          Fieldset(
-            "Simulation Configuration",
-            InlineCheckboxes('selected_cases'),
-            'selected_yumas',
-          ),
+            Fieldset(
+                "Simulation Configuration",
+                # use Field instead of InlineCheckboxes
+                Field("selected_cases"),
+                Field("selected_yumas"),
+            ),
         )
 
 
