@@ -9,6 +9,7 @@ from dataclasses import asdict
 import pandas as pd
 
 from .forms import SelectionForm, SimulationHyperparametersForm, YumaParamsForm
+from .utils import normalize, UINT16_MAX, ONE_MILLION
 
 from yuma_simulation._internal.cases import get_synthetic_cases
 from yuma_simulation._internal.yumas import (
@@ -87,15 +88,15 @@ def simulate_single_case_view(request):
         return HttpResponse("Missing 'case_name' parameter.", status=400)
 
     try:
-        kappa = float(request.GET.get("kappa", 0.5))
-        bond_penalty = float(request.GET.get("bond_penalty", 1.0))
+        raw_kappa = float(request.GET.get("kappa", 32767))
+        raw_bond_penalty = float(request.GET.get("bond_penalty", 65535))
         reset_bonds = request.GET.get("reset_bonds", "False") == "True"
         liquid_alpha_consensus_mode = request.GET.get("liquid_alpha_consensus_mode", "CURRENT")
 
         selected_yuma_key = request.GET.get("selected_yuma_key", "YUMA")
         chosen_yuma = request.GET.get("chosen_yuma", "YUMA")
 
-        bond_moving_avg = float(request.GET.get("bond_moving_avg", 0.975))
+        raw_bond_moving_avg = float(request.GET.get("bond_moving_avg", 900_000))
         liquid_alpha = request.GET.get("liquid_alpha", "False") == "True"
         alpha_high = float(request.GET.get("alpha_high", 0.3))
         alpha_low = float(request.GET.get("alpha_low", 0.1))
@@ -107,13 +108,14 @@ def simulate_single_case_view(request):
         return HttpResponse(f"Invalid parameter: {str(e)}", status=400)
 
     sim_params = SimulationHyperparameters(
-        kappa=kappa,
-        bond_penalty=bond_penalty,
+        kappa=normalize(raw_kappa, UINT16_MAX),
+        bond_penalty=normalize(raw_bond_penalty, UINT16_MAX),
         liquid_alpha_consensus_mode=liquid_alpha_consensus_mode,
     )
 
+
     yuma_params = YumaParams(
-        bond_moving_avg=bond_moving_avg,
+        bond_moving_avg=normalize(raw_bond_moving_avg, ONE_MILLION),
         liquid_alpha=liquid_alpha,
         alpha_high=alpha_high,
         alpha_low=alpha_low,

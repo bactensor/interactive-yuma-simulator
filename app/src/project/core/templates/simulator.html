@@ -562,5 +562,47 @@
   simBtn.addEventListener('click', toggleSidebar);
   resBtn.addEventListener('click', toggleSidebar);
 </script>
+<script>
+  document
+    .querySelectorAll('[data-bs-toggle="tooltip"]')
+    .forEach(el => {
+      new bootstrap.Tooltip(el, {
+        trigger: 'hover',    // only on mouse-over, never on focus
+        container: 'body'    // same as your attr, keeps it out of overflow:hidden
+      });
+    });
+</script>
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    // list of fields to normalize
+    const configs = [
+      { id: 'id_kappa'           , defaultMax: 65535    },
+      { id: 'id_bond_penalty'    , defaultMax: 65535    },
+      { id: 'id_bond_moving_avg' , defaultMax: 1000000  }
+    ];
+  
+    configs.forEach(({id, defaultMax}) => {
+      const input = document.getElementById(id);
+      const label = document.querySelector(`label[for="${id}"]`);
+      if (!input || !label) return;
+  
+      const MAX = parseFloat(input.max) || defaultMax;
+      const scaled = document.createElement('small');
+      scaled.id = `${id}_scaled`;
+      scaled.className = 'text-muted ms-2';
+      label.appendChild(scaled);
+  
+      function refresh() {
+        const v = parseFloat(input.value) || 0;
+        scaled.textContent = `(${(v / MAX).toFixed(4)})`;
+      }
+  
+      input.addEventListener('input', refresh);
+      refresh();
+    });
+  });
+  </script>
+  
+  
 </body>
 </html>
