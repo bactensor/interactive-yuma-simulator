@@ -16,15 +16,23 @@ docker compose build
 # collect static files to external storage while old app is still running
 # docker compose run --rm app sh -c "python manage.py collectstatic --no-input"
 
-SERVICES=$(docker compose ps --services 2>/dev/null \
-           | grep -v -e 'is not set' -e db -e redis)
+# gather list of services, excluding the ones we don’t want
+SERVICES=$(
+  docker compose ps --services 2>/dev/null \
+    | grep -v -e 'is not set' -e db -e redis
+)
 
-# shellcheck disable=2086
-docker compose stop $SERVICES
+# only stop if SERVICES isn’t empty
+if [ -n "$SERVICES" ]; then
+  # shellcheck disable=2086
+  docker compose stop $SERVICES
+else
+  echo "No services to stop."
+fi
 
 docker compose up -d db  # in case it hasn't been launched before
 # backup db before any database changes
-docker compose run --rm backups ./backup-db.sh
+#docker compose run --rm backups ./backup-db.sh
 # start the app container only in order to perform migrations
 docker compose run --rm app sh -c "python manage.py wait_for_database --timeout 10; python manage.py migrate"
 
