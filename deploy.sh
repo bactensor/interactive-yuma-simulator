@@ -7,7 +7,6 @@ if [ ! -f ".env" ]; then
     exit 1;
 fi
 
-docker build --target builder -t project/app-builder .
 docker compose build
 
 # Tag the first image from multi-stage app Dockerfile to mark it as not dangling
