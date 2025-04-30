@@ -19,7 +19,8 @@ docker compose build
 # gather list of services, excluding the ones we don’t want
 SERVICES=$(
   docker compose ps --services 2>/dev/null \
-    | grep -v -e 'is not set' -e db -e redis
+    | grep -v -e 'is not set' -e db -e redis \
+    || true
 )
 
 # only stop if SERVICES isn’t empty
