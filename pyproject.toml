@@ -35,6 +35,8 @@ dependencies = [
     "nvidia-cudnn-cu12==9.1.0.70",
     "torch==2.5.1",
     "yuma-simulation",
+    "django-crispy-forms>=2.4",
+    "crispy-bootstrap5>=2025.4",
 ]
 
 [build-system]

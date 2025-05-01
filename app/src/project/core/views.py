@@ -1,11 +1,15 @@
 import json
 import traceback
+import re
 
 from django.shortcuts import render
 from django.http import HttpResponse
 from dataclasses import asdict
 
+import pandas as pd
+
 from .forms import SelectionForm, SimulationHyperparametersForm, YumaParamsForm
+from .utils import normalize, UINT16_MAX, ONE_MILLION
 
 from yuma_simulation._internal.cases import get_synthetic_cases
 from yuma_simulation._internal.yumas import (
@@ -14,6 +18,7 @@ from yuma_simulation._internal.yumas import (
     YumaSimulationNames
 )
 from yuma_simulation.v1.api import generate_chart_table
+from yuma_simulation.v1 import api as yuma_api
 
 def simulation_view(request):
     selection_form = SelectionForm(request.GET or None)
@@ -60,8 +65,6 @@ def simulation_view(request):
             "decay_rate": yuma_data["decay_rate"],
             "capacity_alpha": yuma_data["capacity_alpha"],
             "alpha_sigmoid_steepness": yuma_data["alpha_sigmoid_steepness"],
-            "override_consensus_high": yuma_data["override_consensus_high"],
-            "override_consensus_low": yuma_data["override_consensus_low"],
         }
 
         yumas_json_data = {
@@ -85,46 +88,40 @@ def simulate_single_case_view(request):
         return HttpResponse("Missing 'case_name' parameter.", status=400)
 
     try:
-        kappa = float(request.GET.get("kappa", 0.5))
-        bond_penalty = float(request.GET.get("bond_penalty", 1.0))
+        raw_kappa = float(request.GET.get("kappa", 32767))
+        raw_bond_penalty = float(request.GET.get("bond_penalty", 65535))
         reset_bonds = request.GET.get("reset_bonds", "False") == "True"
         liquid_alpha_consensus_mode = request.GET.get("liquid_alpha_consensus_mode", "CURRENT")
 
         selected_yuma_key = request.GET.get("selected_yuma_key", "YUMA")
         chosen_yuma = request.GET.get("chosen_yuma", "YUMA")
 
-        bond_moving_avg = float(request.GET.get("bond_moving_avg", 0.975))
+        raw_bond_moving_avg = float(request.GET.get("bond_moving_avg", 900_000))
         liquid_alpha = request.GET.get("liquid_alpha", "False") == "True"
         alpha_high = float(request.GET.get("alpha_high", 0.3))
         alpha_low = float(request.GET.get("alpha_low", 0.1))
         decay_rate = float(request.GET.get("decay_rate", 0.1))
         capacity_alpha = float(request.GET.get("capacity_alpha", 0.1))
         alpha_sigmoid_steepness = float(request.GET.get("alpha_sigmoid_steepness", 10.0))
-        o_chigh = request.GET.get("override_consensus_high")
-        o_clow = request.GET.get("override_consensus_low")
-
-        override_consensus_high = float(o_chigh) if o_chigh else None
-        override_consensus_low = float(o_clow) if o_clow else None
 
     except ValueError as e:
         return HttpResponse(f"Invalid parameter: {str(e)}", status=400)
 
     sim_params = SimulationHyperparameters(
-        kappa=kappa,
-        bond_penalty=bond_penalty,
+        kappa=normalize(raw_kappa, UINT16_MAX),
+        bond_penalty=normalize(raw_bond_penalty, UINT16_MAX),
         liquid_alpha_consensus_mode=liquid_alpha_consensus_mode,
     )
 
+
     yuma_params = YumaParams(
-        bond_moving_avg=bond_moving_avg,
+        bond_moving_avg=normalize(raw_bond_moving_avg, ONE_MILLION),
         liquid_alpha=liquid_alpha,
         alpha_high=alpha_high,
         alpha_low=alpha_low,
         decay_rate=decay_rate,
         capacity_alpha=capacity_alpha,
         alpha_sigmoid_steepness=alpha_sigmoid_steepness,
-        override_consensus_high=override_consensus_high,
-        override_consensus_low=override_consensus_low,
     )
 
     package_cases = get_synthetic_cases(use_full_matrices=True, reset_bonds=reset_bonds)
@@ -140,3 +137,51 @@ def simulate_single_case_view(request):
         return HttpResponse(f"Error generating chart: {str(e)}", status=500)
 
     return HttpResponse(partial_html.data if partial_html else "No data", status=200)
+
+
+def bootstrap_generate_ipynb_table(
+    table_data: dict[str, list[str]],
+    summary_table: pd.DataFrame | None,
+    case_row_ranges: list[tuple[int,int,int]],
+) -> str:
+    if summary_table is None:
+        summary_table = pd.DataFrame(table_data)
+
+    # helper: extract just the src URL from the <img> tag
+    def parse_img_src(html_str: str) -> str:
+        m = re.search(r'src="([^"]+)"', html_str)
+        return m.group(1) if m else ""
+
+    rows = []
+    num_rows = len(summary_table)
+
+    for i in range(num_rows):
+        # figure out which case this row belongs to
+        case_name = next(
+            (summary_table.columns[c_idx]
+             for start, end, c_idx in case_row_ranges
+             if start <= i <= end),
+            summary_table.columns[0]
+        )
+
+        raw_img_tag = summary_table.at[i, case_name]
+        img_src = parse_img_src(raw_img_tag)
+
+        # full-width, single-row layout:
+        rows.append(f"""
+          <div class="mb-4 text-center">
+            <img src="{img_src}"
+                 class="img-fluid w-100"
+                 alt="Chart for {case_name}">
+          </div>
+        """)
+
+    # wrap everything in a single container
+    return f"""
+    <div class="container-fluid px-3">
+      {''.join(rows)}
+    </div>
+    """
+
+# Now override the external lib’s function:
+yuma_api._generate_ipynb_table = bootstrap_generate_ipynb_table

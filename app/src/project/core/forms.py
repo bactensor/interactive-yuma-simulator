@@ -1,6 +1,11 @@
 from dataclasses import asdict
 
 from django import forms
+from crispy_forms.helper import FormHelper
+from crispy_forms.layout import Layout, Field, Fieldset, Div
+from crispy_forms.bootstrap import InlineCheckboxes
+from crispy_bootstrap5.bootstrap5 import FloatingField
+
 from yuma_simulation._internal.cases import cases
 from yuma_simulation._internal.yumas import YumaSimulationNames
 
@@ -9,47 +14,205 @@ yumas_dict = asdict(YumaSimulationNames())
 #do not enable user to pick alpha version - it happens with a checkbox boolean
 del yumas_dict["YUMA3_LIQUID"]
 
-class SimulationHyperparametersForm(forms.Form):
-    kappa = forms.FloatField(initial=0.5)
-    bond_penalty = forms.FloatField(initial=1.0)
-    reset_bonds = forms.BooleanField(
-        required=False, 
-        initial=False, 
-        label="Enable Reset Bonds"
-    )
-    liquid_alpha_consensus_mode = forms.ChoiceField(
-        choices=[
-            ("CURRENT", "CURRENT"),
-            ("PREVIOUS", "PREVIOUS"),
-            ("MIXED", "MIXED"),
-        ],
-        initial="CURRENT",
-        label="Liquid Alpha Consensus Mode"
-    )
 
-
-class YumaParamsForm(forms.Form):
-    bond_moving_avg = forms.FloatField(initial=0.975)
-    liquid_alpha = forms.BooleanField(required=False, initial=False)
-    alpha_high = forms.FloatField(initial=0.3)
-    alpha_low = forms.FloatField(initial=0.1)
-    decay_rate = forms.FloatField(initial=0.1)
-    capacity_alpha = forms.FloatField(initial=0.1)
-    alpha_sigmoid_steepness = forms.FloatField(initial=10.0)
-    override_consensus_high = forms.FloatField(required=False)
-    override_consensus_low = forms.FloatField(required=False)
-
+# WARNING: Refactored to cripsy forms by AI - review and maybe refactor
 
 class SelectionForm(forms.Form):
     selected_cases = forms.MultipleChoiceField(
         choices=[(c.name, c.name) for c in cases],
-        widget=forms.CheckboxSelectMultiple,
         required=True,
         label="Select Cases",
+        widget=forms.SelectMultiple(attrs={
+            "class": "selectpicker form-control",
+            "multiple": "multiple",
+            "data-live-search": "true",
+            "data-actions-box": "true",             # adds “Select All” / “Deselect All”
+            "data-selected-text-format": "count > 3" # “3 of 18 selected” style
+        }),
     )
     selected_yumas = forms.ChoiceField(
-        choices=[(key, value) for key, value in yumas_dict.items()],
-        widget=forms.Select,
-        required=True,
+        choices=[(k, v) for k, v in yumas_dict.items()],
         label="Select Yuma Version",
     )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper(self)
+        self.helper.form_tag = False
+        self.helper.disable_csrf = True
+        self.helper.layout = Layout(
+            Fieldset(
+                "", # empty heading - set in template
+                # use Field instead of InlineCheckboxes
+                Field("selected_cases"),
+                Field("selected_yumas"),
+            ),
+        )
+
+
+class SimulationHyperparametersForm(forms.Form):
+    kappa = forms.FloatField(
+        initial=32767,
+        max_value=65535,
+        widget=forms.NumberInput(attrs={
+            'class':            'form-control',
+            'data-bs-toggle':   'tooltip',
+            'data-bs-trigger':  'hover',
+            'data-bs-placement':'top',
+            'title':            'The consensus majority ratio: The weights set by validators who have lower normalized stake than Kappa are not used in calculating consensus, which affects ranks, which affect incentives.',
+            'data-bs-container':'body',
+        }),
+        error_messages={'max_value': 'Must be at most 65535.'}
+    )
+    bond_penalty = forms.FloatField(
+        initial=65535,
+        max_value=65535,
+        widget=forms.NumberInput(attrs={
+            'class':             'form-control',
+            'data-bs-toggle':    'tooltip',
+            'data-bs-trigger':   'hover',
+            'data-bs-placement': 'top',
+            'title':             'The magnitude of the penalty subtracted from weights for exceeding consensus, for a specific subnet.',
+            'data-bs-container': 'body',
+        }),
+        error_messages={
+            'max_value': 'Must be at most 65535.'
+        }
+        )
+    reset_bonds = forms.BooleanField(required=False, initial=False,
+                                     label="Enable Reset Bonds")
+    liquid_alpha_consensus_mode = forms.ChoiceField(
+        choices=[("CURRENT","Current"),("PREVIOUS","Previous"),("MIXED","Mixed")],
+        initial="CURRENT",
+        label="Liquid Alpha Consensus Mode",
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.helper = FormHelper(self)
+        self.helper.form_tag = False   # we’ll render this with the main form
+        self.helper.disable_csrf = True
+        self.helper.layout = Layout(
+          Fieldset(
+            "", # empty heading - set in template
+            # each field on its own row
+            Div(
+              Field('kappa', wrapper_class='col-md-6 mb-3'),
+              Field('bond_penalty', wrapper_class='col-md-6 mb-3'),
+              css_class='row'
+            ),
+            Div(Field('reset_bonds',                css_class='mb-3'), css_class='row'),
+            Div(Field('liquid_alpha_consensus_mode',css_class='mb-3'), css_class='row'),
+          )
+        )
+
+
+class YumaParamsForm(forms.Form):
+    bond_moving_avg = forms.FloatField(
+        initial=900_000,
+        max_value=1_000_000,
+        widget=forms.NumberInput(attrs={
+            'class':             'form-control',
+            'data-bs-toggle':    'tooltip',
+            'data-bs-trigger':   'hover',
+            'data-bs-placement': 'top',
+            'title':             'The higher the bond moving average, the greater the influence of previously recorded bond values',
+            'data-bs-container': 'body',
+        }),
+        error_messages={
+            'max_value': 'Must be at most 1 000 000.'
+        }
+    )
+    liquid_alpha     = forms.BooleanField(required=False, initial=False)
+    alpha_high       = forms.FloatField(
+        initial=0.3,
+        widget=forms.NumberInput(attrs={
+            'class':             'form-control',
+            'data-bs-toggle':    'tooltip',
+            'data-bs-trigger':   'hover',
+            'data-bs-placement': 'top',
+            'title':             'The aggressive bound on liquid alpha. When buy/sell signals are strong (bold, away from consensus), the computed alpha moves toward this value to speed up bond acquisition or liquidation.',
+            'data-bs-container': 'body',
+        }))
+    alpha_low        = forms.FloatField(
+        initial=0.1,
+        widget=forms.NumberInput(attrs={
+            'class':             'form-control',
+            'data-bs-toggle':    'tooltip',
+            'data-bs-trigger':   'hover',
+            'data-bs-placement': 'top',
+            'title':             'The conservative bound on liquid alpha. When buy/sell signals are weak (modest, close to consensus), the computed alpha moves toward this value to slow down bond adjustments.',
+            'data-bs-container': 'body',
+        }))
+    decay_rate       = forms.FloatField(
+        initial=0.1,
+        widget=forms.NumberInput(attrs={
+            'class':             'form-control',
+            'data-bs-toggle':    'tooltip',
+            'data-bs-trigger':   'hover',
+            'data-bs-placement': 'top',
+            'title':             'Ensures that bonds associated with unsupported servers decrease over time.',
+            'data-bs-container': 'body',
+        }))
+    capacity_alpha   = forms.FloatField(
+        initial=0.1,
+        widget=forms.NumberInput(attrs={
+            'class':             'form-control',
+            'data-bs-toggle':    'tooltip',
+            'data-bs-trigger':   'hover',
+            'data-bs-placement': 'top',
+            'title':             'Limits the bond purchase power per epoch.',
+            'data-bs-container': 'body',
+        }))
+    alpha_sigmoid_steepness = forms.FloatField(
+        initial=10.0,
+        widget=forms.NumberInput(attrs={
+            'class':             'form-control',
+            'data-bs-toggle':    'tooltip',
+            'data-bs-trigger':   'hover',
+            'data-bs-placement': 'top',
+            'title':             'A larger value makes the system snap quickly between conservative and aggressive bounds of liquid alpha as discrepancies change, while a smaller value yields a more gradual transition.',
+            'data-bs-container': 'body',
+        }))
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.helper = FormHelper(self)
+        self.helper.form_tag = False
+        self.helper.disable_csrf = True
+        self.helper.layout = Layout(
+          Fieldset(
+            "", # empty heading - set in template
+
+            # bond_moving_avg & liquid_alpha side-by-side
+            Div(
+              Field('bond_moving_avg', wrapper_class='col-12 mb-3'),
+              Field('liquid_alpha',    wrapper_class='col-12 mb-3'),
+              css_class='row bond-liquid-group'
+            ),
+
+            # alpha_high & alpha_low side-by-side (shown when liquid_alpha is checked)
+            Div(
+              Field('alpha_high', wrapper_class='col-md-6 mb-3'),
+              Field('alpha_low',  wrapper_class='col-md-6 mb-3'),
+              css_class='row alpha-params-group'
+            ),
+
+            # alpha_sigmoid_steepness on its own row
+            Div(
+              Field('alpha_sigmoid_steepness', wrapper_class='col-12 mb-3'),
+              css_class='row alpha-params-group'
+            ),
+
+            # decay_rate & capacity_alpha for special Yuma key
+            Div(
+              Field('decay_rate',     wrapper_class='col-md-6 mb-3'),
+              Field('capacity_alpha', wrapper_class='col-md-6 mb-3'),
+              css_class='row decay-capacity-group'
+            ),
+
+            # override fields are omitted entirely from the layout
+          )
+        )
