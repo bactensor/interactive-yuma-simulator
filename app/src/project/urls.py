@@ -9,7 +9,7 @@ from .core.views import simulation_view, simulate_single_case_view
 urlpatterns = [
     path("admin/", site.urls),
     path("", include("django.contrib.auth.urls")),
-    path("", RedirectView.as_view(url="/simulator/", permament=False)),
+    path("", RedirectView.as_view(url="/simulator/", permanent=False)),
     path("simulator/", simulation_view, name="simulation_view"),
     path("simulate_single_case/", simulate_single_case_view, name="simulate_single_case"),
 ]
