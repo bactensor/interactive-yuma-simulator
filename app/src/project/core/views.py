@@ -1,10 +1,11 @@
 import json
 import traceback
 import re
+from dataclasses import asdict
 
 from django.shortcuts import render
 from django.http import HttpResponse
-from dataclasses import asdict
+from django.views.decorators.cache import cache_control
 
 import pandas as pd
 
@@ -20,6 +21,7 @@ from yuma_simulation._internal.yumas import (
 from yuma_simulation.v1.api import generate_chart_table
 from yuma_simulation.v1 import api as yuma_api
 
+@cache_control(public=True, max_age=604800, s_maxage=604800)
 def simulation_view(request):
     selection_form = SelectionForm(request.GET or None)
     hyper_form = SimulationHyperparametersForm(request.GET or None)
@@ -78,6 +80,8 @@ def simulation_view(request):
 
     return render(request, "simulator.html", context)
 
+
+@cache_control(public=True, max_age=604800, s_maxage=604800)
 def simulate_single_case_view(request):
     """
     Returns HTML snippet for a single case simulation.
