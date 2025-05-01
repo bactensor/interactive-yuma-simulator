@@ -9,7 +9,6 @@ from functools import wraps
 import environ
 import structlog
 
-
 root = environ.Path(__file__) - 2
 
 env = environ.Env(DEBUG=(bool, False))
@@ -197,8 +196,6 @@ if env.bool("HTTPS_REDIRECT", default=False) and not DEBUG:
     CSRF_COOKIE_SECURE = True
 else:
     SECURE_SSL_REDIRECT = False
-
-
 
 
 EMAIL_BACKEND = env("EMAIL_BACKEND")

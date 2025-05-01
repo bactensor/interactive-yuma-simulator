@@ -3,7 +3,7 @@ from django.contrib.admin.sites import site
 from django.urls import include, path
 
 from .core.consumers import DefaultConsumer
-from .core.views import simulation_view, simulate_single_case_view
+from .core.views import simulate_single_case_view, simulation_view
 
 urlpatterns = [
     path("admin/", site.urls),

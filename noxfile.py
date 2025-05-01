@@ -22,8 +22,6 @@ nox.options.reuse_existing_virtualenvs = not CI
 
 def install(session: nox.Session, *args):
     groups = []
-    for arg in args:
-        groups.extend(["--group", arg])
 
     uv_env = getattr(session.virtualenv, "location", os.getenv("VIRTUAL_ENV"))
     session.run_install(

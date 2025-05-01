@@ -96,3 +96,14 @@ ignore-words-list = 'datas'
 
 [tool.uv.sources]
 yuma-simulation = { path = "yuma_simulation/yuma_simulation-0.1.1-py3-none-any.whl" }
+
+[dependency-groups]
+dev = [
+    "codespell>=2.4.1",
+    "freezegun>=1.5.1",
+    "mypy>=1.15.0",
+    "pytest>=8.3.5",
+    "pytest-django>=4.11.1",
+    "pytest-xdist>=3.6.1",
+    "ruff>=0.11.7",
+]

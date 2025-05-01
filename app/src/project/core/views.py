@@ -1,24 +1,18 @@
 import json
-import traceback
 import re
-
-from django.shortcuts import render
-from django.http import HttpResponse
 from dataclasses import asdict
 
 import pandas as pd
+from django.http import HttpResponse
+from django.shortcuts import render
+from yuma_simulation._internal.cases import get_synthetic_cases
+from yuma_simulation._internal.yumas import SimulationHyperparameters, YumaParams, YumaSimulationNames
+from yuma_simulation.v1 import api as yuma_api
+from yuma_simulation.v1.api import generate_chart_table
 
 from .forms import SelectionForm, SimulationHyperparametersForm, YumaParamsForm
-from .utils import normalize, UINT16_MAX, ONE_MILLION
+from .utils import ONE_MILLION, UINT16_MAX, normalize
 
-from yuma_simulation._internal.cases import get_synthetic_cases
-from yuma_simulation._internal.yumas import (
-    SimulationHyperparameters,
-    YumaParams,
-    YumaSimulationNames
-)
-from yuma_simulation.v1.api import generate_chart_table
-from yuma_simulation.v1 import api as yuma_api
 
 def simulation_view(request):
     selection_form = SelectionForm(request.GET or None)
@@ -42,7 +36,7 @@ def simulation_view(request):
 
         yumas_dict = asdict(YumaSimulationNames())
         selected_yuma_key = selection_form.cleaned_data["selected_yumas"]
-        
+
         yuma_data = yuma_form.cleaned_data
         if selected_yuma_key in ["YUMA", "YUMA4"] and yuma_data["liquid_alpha"]:
             selected_yuma_key += "_LIQUID"
@@ -78,6 +72,7 @@ def simulation_view(request):
 
     return render(request, "simulator.html", context)
 
+
 def simulate_single_case_view(request):
     """
     Returns HTML snippet for a single case simulation.
@@ -93,7 +88,6 @@ def simulate_single_case_view(request):
         reset_bonds = request.GET.get("reset_bonds", "False") == "True"
         liquid_alpha_consensus_mode = request.GET.get("liquid_alpha_consensus_mode", "CURRENT")
 
-        selected_yuma_key = request.GET.get("selected_yuma_key", "YUMA")
         chosen_yuma = request.GET.get("chosen_yuma", "YUMA")
 
         raw_bond_moving_avg = float(request.GET.get("bond_moving_avg", 900_000))
@@ -113,7 +107,6 @@ def simulate_single_case_view(request):
         liquid_alpha_consensus_mode=liquid_alpha_consensus_mode,
     )
 
-
     yuma_params = YumaParams(
         bond_moving_avg=normalize(raw_bond_moving_avg, ONE_MILLION),
         liquid_alpha=liquid_alpha,
@@ -130,9 +123,10 @@ def simulate_single_case_view(request):
         return HttpResponse(f"Case '{case_name}' not found.", status=404)
 
     try:
-
         selected_yumas = [(chosen_yuma, yuma_params)]
-        partial_html = generate_chart_table(cases=[chosen_case], yuma_versions=selected_yumas, yuma_hyperparameters=sim_params)
+        partial_html = generate_chart_table(
+            cases=[chosen_case], yuma_versions=selected_yumas, yuma_hyperparameters=sim_params
+        )
     except Exception as e:
         return HttpResponse(f"Error generating chart: {str(e)}", status=500)
 
@@ -142,7 +136,7 @@ def simulate_single_case_view(request):
 def bootstrap_generate_ipynb_table(
     table_data: dict[str, list[str]],
     summary_table: pd.DataFrame | None,
-    case_row_ranges: list[tuple[int,int,int]],
+    case_row_ranges: list[tuple[int, int, int]],
 ) -> str:
     if summary_table is None:
         summary_table = pd.DataFrame(table_data)
@@ -158,10 +152,8 @@ def bootstrap_generate_ipynb_table(
     for i in range(num_rows):
         # figure out which case this row belongs to
         case_name = next(
-            (summary_table.columns[c_idx]
-             for start, end, c_idx in case_row_ranges
-             if start <= i <= end),
-            summary_table.columns[0]
+            (summary_table.columns[c_idx] for start, end, c_idx in case_row_ranges if start <= i <= end),
+            summary_table.columns[0],
         )
 
         raw_img_tag = summary_table.at[i, case_name]
@@ -179,9 +171,10 @@ def bootstrap_generate_ipynb_table(
     # wrap everything in a single container
     return f"""
     <div class="container-fluid px-3">
-      {''.join(rows)}
+      {"".join(rows)}
     </div>
     """
+
 
 # Now override the external lib’s function:
 yuma_api._generate_ipynb_table = bootstrap_generate_ipynb_table
