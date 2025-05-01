@@ -19,25 +19,6 @@ if [ -z "${_COMMON_SH_LOADED:-}" ]; then
       fi
   }
 
-
-  load_project_env() {
-      if [ "$(basename "$0")" == 'bin' ]; then
-        cd ..
-      fi
-
-      . .env
-  }
-
-  get_db_docker_network() {
-    if [[ "$DATABASE_URL" =~ "@db:" ]]; then
-      echo interactive_yuma_simulator_default
-    else
-      echo host
-    fi
-  }
-
-  load_project_env
-
   if [ -n "${SENTRY_DSN}" ]; then
     export SENTRY_DSN
     eval "$(sentry-cli bash-hook)"

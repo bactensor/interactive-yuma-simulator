@@ -68,6 +68,8 @@ INSTALLED_APPS = [
     "django_structlog",
     "constance",
     "project.core",
+    "crispy_forms",
+    "crispy_bootstrap5",
 ]
 
 
@@ -171,6 +173,7 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
+
 # Internationalization
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"
@@ -193,6 +196,7 @@ if env.bool("HTTPS_REDIRECT", default=False) and not DEBUG:
     CSRF_COOKIE_SECURE = True
 else:
     SECURE_SSL_REDIRECT = False
+
 
 EMAIL_BACKEND = env("EMAIL_BACKEND")
 EMAIL_FILE_PATH = env("EMAIL_FILE_PATH")
@@ -248,6 +252,11 @@ LOGGING = {
             # only logs unavailable libs during psycopg initialization
             "propagate": False,
         },
+        # Fix spamming DEBUG-level logs in manage.py shell and shell_plus.
+        "parso": {
+            "handlers": ["console"],
+            "level": "INFO",
+        },
     },
 }
 
@@ -293,3 +302,6 @@ if SENTRY_DSN := env("SENTRY_DSN", default=""):
         ],
     )
     ignore_logger("django.security.DisallowedHost")
+
+CRISPY_ALLOWED_TEMPLATE_PACKS = "bootstrap5"
+CRISPY_TEMPLATE_PACK = "bootstrap5"

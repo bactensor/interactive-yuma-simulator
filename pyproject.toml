@@ -31,10 +31,12 @@ dependencies = [
     "psycopg2-binary>=2.9.10",
     "django-csp>=3.8",
     "matplotlib>=3.10.0",
-    "yuma-simulation @ file:///${PROJECT_ROOT}/yuma_simulation/yuma_simulation-0.1.0-py3-none-any.whl",
     "nvidia-cublas-cu12==12.4.5.8",
     "nvidia-cudnn-cu12==9.1.0.70",
     "torch==2.5.1",
+    "yuma-simulation",
+    "django-crispy-forms>=2.4",
+    "crispy-bootstrap5>=2025.4",
 ]
 
 [build-system]
@@ -74,7 +76,7 @@ line-length = 120
 # TODO add D
 select = [
     "E", "F", "I", "UP", "S",
-    "TCH005",
+    "TC005",
 ]
 # TODO: remove E501 once docstrings are formatted
 ignore = [
@@ -91,3 +93,17 @@ ignore = [
 [tool.codespell]
 skip = '*.min.js,*.lock,*/monitoring_certs/*'
 ignore-words-list = 'datas'
+
+[tool.uv.sources]
+yuma-simulation = { path = "yuma_simulation/yuma_simulation-0.1.1-py3-none-any.whl" }
+
+[dependency-groups]
+dev = [
+    "codespell>=2.4.1",
+    "freezegun>=1.5.1",
+    "mypy>=1.15.0",
+    "pytest>=8.3.5",
+    "pytest-django>=4.11.1",
+    "pytest-xdist>=3.6.1",
+    "ruff>=0.11.7",
+]
