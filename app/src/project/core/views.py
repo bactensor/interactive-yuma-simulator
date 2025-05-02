@@ -38,7 +38,7 @@ def simulation_view(request):
         selected_yuma_key = selection_form.cleaned_data["selected_yumas"]
 
         yuma_data = yuma_form.cleaned_data
-        if selected_yuma_key in ["YUMA", "YUMA4"] and yuma_data["liquid_alpha"]:
+        if selected_yuma_key in ["YUMA3"] and yuma_data["liquid_alpha"]:
             selected_yuma_key += "_LIQUID"
 
         chosen_yuma = yumas_dict[selected_yuma_key]
@@ -85,13 +85,13 @@ def simulate_single_case_view(request):
     try:
         raw_kappa = float(request.GET.get("kappa", 32767))
         raw_bond_penalty = float(request.GET.get("bond_penalty", 65535))
-        reset_bonds = request.GET.get("reset_bonds", "False") == "True"
+        reset_bonds = request.GET.get("reset_bonds", "False") == "true"
         liquid_alpha_consensus_mode = request.GET.get("liquid_alpha_consensus_mode", "CURRENT")
+        liquid_alpha = request.GET.get("liquid_alpha", "False") == "true"
 
         chosen_yuma = request.GET.get("chosen_yuma", "YUMA")
 
         raw_bond_moving_avg = float(request.GET.get("bond_moving_avg", 900_000))
-        liquid_alpha = request.GET.get("liquid_alpha", "False") == "True"
         alpha_high = float(request.GET.get("alpha_high", 0.3))
         alpha_low = float(request.GET.get("alpha_low", 0.1))
         decay_rate = float(request.GET.get("decay_rate", 0.1))
