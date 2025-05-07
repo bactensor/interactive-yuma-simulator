@@ -1,3 +1,9 @@
+import re
+from urllib.parse import urljoin
+from django.conf import settings
+from django.core.cache import cache
+import requests
+
 UINT16_MAX = 65535.0
 ONE_MILLION = 1_000_000.0
 
@@ -9,3 +15,59 @@ def normalize(value: float, max_value: float) -> float:
         return value / max_value
     except (TypeError, ZeroDivisionError):
         raise ValueError(f"Cannot normalize value={value} with max_value={max_value}")
+
+
+_CACHE_KEY = "metagraph_client_session"
+
+def get_metagraph_session() -> requests.Session:
+    """
+    Return a logged‐in Session for the external Django service.
+    We cache it in Django’s cache so we only re-login once per hour.
+    """
+    sess = cache.get(_CACHE_KEY)
+    if sess:
+        return sess
+
+    sess = requests.Session()
+    login_url = urljoin(settings.MGRAPH_BASE_URL, "admin/login/")
+
+    r1 = sess.get(login_url)
+    m = re.search(r'name="csrfmiddlewaretoken" value="([^"]+)"', r1.text)
+    if not m:
+        raise RuntimeError("Could not get CSRF token")
+    token = m.group(1)
+
+    resp = sess.post(
+        login_url,
+        data={
+            "csrfmiddlewaretoken": token,
+            "username": settings.MGRAPH_USERNAME,
+            "password": settings.MGRAPH_PASSWORD,
+            "next": "/admin/",
+        },
+        headers={"Referer": login_url},
+        timeout=10,
+    )
+    resp.raise_for_status()
+    if "admin/" not in resp.url:
+        raise RuntimeError("Login failed")
+
+    # cache for an hour (or however long your external session lives)
+    cache.set(_CACHE_KEY, sess, 60 * 60)
+    return sess
+
+def fetch_metagraph_data(
+    start_block: int,
+    end_block:   int,
+    netuid:      int,
+) -> dict:
+    sess = get_metagraph_session()
+    url = urljoin(settings.MGRAPH_BASE_URL, "metagraph-data/")
+    params = {
+        "start_block":       start_block,
+        "end_block":         end_block,
+        "netuid":            netuid,
+    }
+    r = sess.get(url, params=params, timeout=100)
+    r.raise_for_status()
+    return r.json()

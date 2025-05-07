@@ -30,6 +30,34 @@ class SelectionForm(forms.Form):
             }
         ),
     )
+    use_metagraph = forms.BooleanField(
+        required=False,
+        initial=False,
+        label="Metagraph Case",
+        widget=forms.CheckboxInput(attrs={"id": "id_use_metagraph"}),
+    )
+
+    start_block = forms.IntegerField(
+        required=False,
+        label="Start Block",
+        widget=forms.NumberInput(attrs={"class": "form-control", "id": "id_start_block"}),
+    )
+    epochs_num = forms.IntegerField(
+        required=False,
+        label="Number of Epochs",
+        widget=forms.NumberInput(attrs={"class": "form-control", "id": "id_epochs_num"}),
+    )
+    netuid = forms.IntegerField(
+        required=False,
+        label="Subnet ID",
+        widget=forms.NumberInput(attrs={"class": "form-control", "id": "id_netuid"}),
+    )
+    validators = forms.CharField(
+        required=False,
+        label="Validators IDs (comma-sep)",
+        widget=forms.TextInput(attrs={"class": "form-control", "id": "id_validators"}),
+    )
+
     selected_yumas = forms.ChoiceField(
         choices=[(k, v) for k, v in yumas_dict.items()],
         label="Select Yuma Version",
@@ -42,9 +70,25 @@ class SelectionForm(forms.Form):
         self.helper.disable_csrf = True
         self.helper.layout = Layout(
             Fieldset(
-                "",  # empty heading - set in template
-                # use Field instead of InlineCheckboxes
-                Field("selected_cases"),
+                "",
+                Div(
+                    Field("selected_cases"),
+                    css_class="mode-block",
+                    id="block_standard",
+                ),
+                Div(
+                    Field("use_metagraph"),
+                    Div(
+                        Field("start_block"),
+                        Field("epochs_num"),
+                        Field("netuid"),
+                        Field("validators"),
+                        css_class="ml-4",
+                        id="metagraph_params",
+                    ),
+                    css_class="mode-block",
+                    id="block_metagraph",
+                ),
                 Field("selected_yumas"),
             ),
         )
@@ -103,7 +147,11 @@ class SimulationHyperparametersForm(forms.Form):
                     Field("bond_penalty", wrapper_class="col-md-6 mb-3"),
                     css_class="row",
                 ),
-                Div(Field("reset_bonds", css_class="mb-3"), css_class="row"),
+                Div(
+                    Field("reset_bonds", css_class="mb-3"),
+                    css_class="row",
+                    id="row_reset_bonds",
+                ),
                 Div(Field("liquid_alpha_consensus_mode", css_class="mb-3"), css_class="row"),
             )
         )
