@@ -6,6 +6,7 @@ from dataclasses import asdict
 import pandas as pd
 from django.http import HttpResponse
 from django.shortcuts import render
+from django.views.decorators.cache import cache_control
 from requests.exceptions import HTTPError
 from yuma_simulation._internal.cases import get_synthetic_cases, instantiate_metagraph_case
 from yuma_simulation._internal.yumas import SimulationHyperparameters, YumaParams, YumaSimulationNames
@@ -18,6 +19,7 @@ from .utils import ONE_MILLION, UINT16_MAX, fetch_metagraph_data, normalize
 logger = logging.getLogger(__name__)
 
 
+@cache_control(public=True, max_age=604800, s_maxage=604800)
 def simulation_view(request):
     selection_form = SelectionForm(request.GET or None)
     hyper_form = SimulationHyperparametersForm(request.GET or None)
@@ -97,6 +99,7 @@ def simulation_view(request):
     return render(request, "simulator.html", context)
 
 
+@cache_control(public=True, max_age=604800, s_maxage=604800)
 def simulate_single_case_view(request):
     """
     Returns HTML snippet for a single case simulation.
