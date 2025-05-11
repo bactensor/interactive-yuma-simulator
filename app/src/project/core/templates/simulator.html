@@ -421,21 +421,9 @@
 
         const simForm = document.getElementById('simulationForm');
 
-        console.log('[DEBUG] Template booted:');
-        console.log('   validForms =', validForms);
-        console.log('   selectedCases =', selectedCases);
-        console.log('   yumasData =', yumasData);
-        console.log('   Metagraph toggle checked =', document.getElementById('id_use_metagraph').checked);
-
-        window.addEventListener("load", () => {
-          console.log('[DEBUG] window.load fired. validForms=', validForms);
-          if (validForms) {
-            console.log('[DEBUG] ➡️ calling fetchAllCasesParallel()');
-            fetchAllCasesParallel();
-          } else {
-            console.log('[DEBUG] ❌ skipping fetchAllCasesParallel() because validForms is false');
-          }
-        });
+        window.addEventListener("load", () => 
+          validForms && fetchAllCasesParallel()
+        );
       
         function parseCaseNumber(caseName) {
           const m = caseName.match(/^Case\s+(\d+)/i);
@@ -443,11 +431,6 @@
         }
         
         async function fetchAllCasesParallel() {
-          console.log(
-            "[DEBUG] fetchAllCasesParallel called",
-            "validForms=" + validForms,
-            "useMetagraph=" + useMetagraphEl.checked
-          );
           const chartWrapper = document.getElementById("chartWrapper");
 
           // toggle metagraph styling
