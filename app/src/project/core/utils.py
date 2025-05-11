@@ -1,15 +1,17 @@
+import logging
 import re
 from urllib.parse import urljoin
+
+import requests
 from django.conf import settings
 from django.core.cache import cache
-import requests
-import logging
 
 UINT16_MAX = 65535.0
 ONE_MILLION = 1_000_000.0
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG) 
+logger.setLevel(logging.DEBUG)
+
 
 # TODO: refactor yuma-simulation package to accept hyperparameter values natively
 def normalize(value: float, max_value: float) -> float:
@@ -21,6 +23,7 @@ def normalize(value: float, max_value: float) -> float:
 
 
 _CACHE_KEY = "metagraph_client_session"
+
 
 def get_metagraph_session() -> requests.Session:
     """
@@ -59,17 +62,18 @@ def get_metagraph_session() -> requests.Session:
     cache.set(_CACHE_KEY, sess, 60 * 60)
     return sess
 
+
 def fetch_metagraph_data(
     start_block: int,
-    end_block:   int,
-    netuid:      int,
+    end_block: int,
+    netuid: int,
 ) -> dict:
     sess = get_metagraph_session()
     url = urljoin(settings.MGRAPH_BASE_URL, "metagraph-data/")
     params = {
         "start_block": start_block,
-        "end_block":   end_block,
-        "netuid":      netuid,
+        "end_block": end_block,
+        "netuid": netuid,
     }
 
     logger.debug("→ GET %s %r", url, params)
@@ -87,7 +91,7 @@ def fetch_metagraph_data(
             r.status_code,
             r.reason,
             body[:500],
-            err
+            err,
         )
     r.raise_for_status()
     return r.json()

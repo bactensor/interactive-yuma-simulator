@@ -1,34 +1,35 @@
 import json
+import logging
 import re
 from dataclasses import asdict
 
 import pandas as pd
 from django.http import HttpResponse
 from django.shortcuts import render
+from requests.exceptions import HTTPError
 from yuma_simulation._internal.cases import get_synthetic_cases, instantiate_metagraph_case
 from yuma_simulation._internal.yumas import SimulationHyperparameters, YumaParams, YumaSimulationNames
 from yuma_simulation.v1 import api as yuma_api
 from yuma_simulation.v1.api import generate_chart_table, generate_metagraph_based_chart_table
 
 from .forms import SelectionForm, SimulationHyperparametersForm, YumaParamsForm
-from .utils import ONE_MILLION, UINT16_MAX, normalize, fetch_metagraph_data
-from requests.exceptions import HTTPError
+from .utils import ONE_MILLION, UINT16_MAX, fetch_metagraph_data, normalize
 
-import logging
 logger = logging.getLogger(__name__)
+
 
 def simulation_view(request):
     selection_form = SelectionForm(request.GET or None)
-    hyper_form     = SimulationHyperparametersForm(request.GET or None)
-    yuma_form      = YumaParamsForm(request.GET or None)
+    hyper_form = SimulationHyperparametersForm(request.GET or None)
+    yuma_form = YumaParamsForm(request.GET or None)
 
     context = {
         "selection_form": selection_form,
-        "hyper_form":     hyper_form,
-        "yuma_form":      yuma_form,
-        "valid_forms":    False,
-        "cases_json":     "[]",
-        "yumas_json":     "{}",
+        "hyper_form": hyper_form,
+        "yuma_form": yuma_form,
+        "valid_forms": False,
+        "cases_json": "[]",
+        "yumas_json": "{}",
     }
 
     if request.GET.get("use_metagraph"):
@@ -41,7 +42,7 @@ def simulation_view(request):
             start = cleaned["start_block"]
             netuid = cleaned["netuid"]
             raw_validators = cleaned.get("validators", "")
-            
+
             picked_validators = check_validators(
                 selection_form,
                 start_block=start,
@@ -58,38 +59,40 @@ def simulation_view(request):
             selected_case_names = cleaned.get("selected_cases", [])
             context["cases_json"] = json.dumps(selected_case_names)
 
-            yumas_dict  = asdict(YumaSimulationNames())
-            yuma_key    = cleaned["selected_yumas"]
-            yuma_data   = yuma_form.cleaned_data
+            yumas_dict = asdict(YumaSimulationNames())
+            yuma_key = cleaned["selected_yumas"]
+            yuma_data = yuma_form.cleaned_data
 
             if yuma_key == "YUMA3" and yuma_data["liquid_alpha"]:
                 yuma_key += "_LIQUID"
 
             chosen_yuma = yumas_dict[yuma_key]
-            hyper_data  = hyper_form.cleaned_data
+            hyper_data = hyper_form.cleaned_data
 
             sim_params = {
-                "kappa":                       hyper_data["kappa"],
-                "bond_penalty":                hyper_data["bond_penalty"],
-                "reset_bonds":                 hyper_data["reset_bonds"],
+                "kappa": hyper_data["kappa"],
+                "bond_penalty": hyper_data["bond_penalty"],
+                "reset_bonds": hyper_data["reset_bonds"],
                 "liquid_alpha_consensus_mode": hyper_data["liquid_alpha_consensus_mode"],
             }
             yuma_params = {
-                "bond_moving_avg":         yuma_data["bond_moving_avg"],
-                "liquid_alpha":            yuma_data["liquid_alpha"],
-                "alpha_high":              yuma_data["alpha_high"],
-                "alpha_low":               yuma_data["alpha_low"],
-                "decay_rate":              yuma_data["decay_rate"],
-                "capacity_alpha":          yuma_data["capacity_alpha"],
+                "bond_moving_avg": yuma_data["bond_moving_avg"],
+                "liquid_alpha": yuma_data["liquid_alpha"],
+                "alpha_high": yuma_data["alpha_high"],
+                "alpha_low": yuma_data["alpha_low"],
+                "decay_rate": yuma_data["decay_rate"],
+                "capacity_alpha": yuma_data["capacity_alpha"],
                 "alpha_sigmoid_steepness": yuma_data["alpha_sigmoid_steepness"],
             }
 
-            context["yumas_json"] = json.dumps({
-                "selected_yuma_key": yuma_key,
-                "chosen_yuma":       chosen_yuma,
-                "sim_params":        sim_params,
-                "yuma_params":       yuma_params,
-            })
+            context["yumas_json"] = json.dumps(
+                {
+                    "selected_yuma_key": yuma_key,
+                    "chosen_yuma": chosen_yuma,
+                    "sim_params": sim_params,
+                    "yuma_params": yuma_params,
+                }
+            )
 
     return render(request, "simulator.html", context)
 
@@ -153,30 +156,28 @@ def simulate_single_case_view(request):
 
     return HttpResponse(partial_html.data if partial_html else "No data", status=200)
 
+
 def metagraph_simulation_view(request):
     try:
-        raw_kappa   = float(request.GET.get("kappa", 32767))
+        raw_kappa = float(request.GET.get("kappa", 32767))
         raw_bond_penalty = float(request.GET.get("bond_penalty", 65535))
-        reset_bonds = request.GET.get("reset_bonds", "False") == "true"
-        lam         = request.GET.get("liquid_alpha_consensus_mode", "CURRENT")
-        liq_alpha   = request.GET.get("liquid_alpha", "False") == "true"
+        lam = request.GET.get("liquid_alpha_consensus_mode", "CURRENT")
+        liq_alpha = request.GET.get("liquid_alpha", "False") == "true"
         chosen_yuma = request.GET.get("selected_yumas", "YUMA")
 
-        raw_bma     = float(request.GET.get("bond_moving_avg", 900_000))
-        alpha_high  = float(request.GET.get("alpha_high", 0.3))
-        alpha_low   = float(request.GET.get("alpha_low", 0.1))
-        decay_rate  = float(request.GET.get("decay_rate", 0.1))
-        cap_alpha   = float(request.GET.get("capacity_alpha", 0.1))
-        steepness   = float(request.GET.get("alpha_sigmoid_steepness", 10.0))
+        raw_bma = float(request.GET.get("bond_moving_avg", 900_000))
+        alpha_high = float(request.GET.get("alpha_high", 0.3))
+        alpha_low = float(request.GET.get("alpha_low", 0.1))
+        decay_rate = float(request.GET.get("decay_rate", 0.1))
+        cap_alpha = float(request.GET.get("capacity_alpha", 0.1))
+        steepness = float(request.GET.get("alpha_sigmoid_steepness", 10.0))
 
         start_block = int(request.GET.get("start_block", 0))
-        epochs_num  = int(request.GET.get("epochs_num", 0))
-        netuid      = int(request.GET.get("netuid", 0))
+        epochs_num = int(request.GET.get("epochs_num", 0))
+        netuid = int(request.GET.get("netuid", 0))
 
         raw_validators = request.GET.get("validators", "")
-        validators = [
-            int(v.strip()) for v in raw_validators.split(",") if v.strip()
-        ]
+        validators = [int(v.strip()) for v in raw_validators.split(",") if v.strip()]
     except ValueError as e:
         return HttpResponse(f"Invalid parameter: {e}", status=400)
 
@@ -204,14 +205,10 @@ def metagraph_simulation_view(request):
         )
     except HTTPError as e:
         if e.response is not None and e.response.status_code == 404:
-            return HttpResponse(
-                f"No metagraph data for blocks {start_block}–{end_block}",
-                status=404
-            )
+            return HttpResponse(f"No metagraph data for blocks {start_block}–{end_block}", status=404)
         return HttpResponse(f"Error fetching metagraph data: {e}", status=400)
     except Exception as e:
         return HttpResponse(f"Error fetching metagraph data: {e}", status=400)
-
 
     try:
         case = instantiate_metagraph_case(
@@ -221,9 +218,7 @@ def metagraph_simulation_view(request):
     except ValueError as e:
         return HttpResponse(str(e), status=400)
 
-    selected_yumas = [
-        (asdict(YumaSimulationNames())[chosen_yuma], yuma_params)
-    ]
+    selected_yumas = [(asdict(YumaSimulationNames())[chosen_yuma], yuma_params)]
 
     partial_html = generate_metagraph_based_chart_table(
         yuma_versions=selected_yumas,
@@ -234,6 +229,7 @@ def metagraph_simulation_view(request):
 
     return HttpResponse(partial_html.data or "No data", status=200)
 
+
 def check_validators(
     form,
     start_block: int,
@@ -242,10 +238,10 @@ def check_validators(
     stake_threshold: int = 1000,
 ) -> list[int] | None:
     """
-    Fetch metagraph data for `start_block`/`netuid`, 
-    validate the comma-separated IDs in `raw_validators` 
+    Fetch metagraph data for `start_block`/`netuid`,
+    validate the comma-separated IDs in `raw_validators`
     against the first‐epoch stakes, and add errors to `form`
-    as needed. Returns a list of ints (possibly empty) 
+    as needed. Returns a list of ints (possibly empty)
     or None if the fetch itself failed in a fatal way.
     """
     try:
@@ -280,11 +276,7 @@ def check_validators(
 
     first_epoch = next(iter(stakes))
     first_stakes = stakes[first_epoch]
-    valid_idxs = {
-        int(idx_str)
-        for idx_str, stake in first_stakes.items()
-        if stake > stake_threshold
-    }
+    valid_idxs = {int(idx_str) for idx_str, stake in first_stakes.items() if stake > stake_threshold}
     valid_uids = {uids[i] for i in valid_idxs if i < len(uids)}
 
     # parse and validate the raw comma-list
@@ -301,10 +293,7 @@ def check_validators(
 
         picked_validators.append(vid)
         if vid not in valid_uids:
-            form.add_error(
-                "validators",
-                f"Validator ID {vid} has zero stake in epoch {first_epoch}"
-            )
+            form.add_error("validators", f"Validator ID {vid} has zero stake in epoch {first_epoch}")
 
     return picked_validators
 

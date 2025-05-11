@@ -48,8 +48,8 @@ class SelectionForm(forms.Form):
         min_value=1,
         max_value=100,
         error_messages={
-            'min_value': "You must run at least 1 epoch.",
-            'max_value': "You can request at most 100 epochs.",
+            "min_value": "You must run at least 1 epoch.",
+            "max_value": "You can request at most 100 epochs.",
         },
         widget=forms.NumberInput(attrs={"class": "form-control", "id": "id_epochs_num"}),
     )
