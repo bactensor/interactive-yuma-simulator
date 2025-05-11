@@ -3,10 +3,13 @@ from urllib.parse import urljoin
 from django.conf import settings
 from django.core.cache import cache
 import requests
+import logging
 
 UINT16_MAX = 65535.0
 ONE_MILLION = 1_000_000.0
 
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG) 
 
 # TODO: refactor yuma-simulation package to accept hyperparameter values natively
 def normalize(value: float, max_value: float) -> float:
@@ -64,10 +67,27 @@ def fetch_metagraph_data(
     sess = get_metagraph_session()
     url = urljoin(settings.MGRAPH_BASE_URL, "metagraph-data/")
     params = {
-        "start_block":       start_block,
-        "end_block":         end_block,
-        "netuid":            netuid,
+        "start_block": start_block,
+        "end_block":   end_block,
+        "netuid":      netuid,
     }
-    r = sess.get(url, params=params, timeout=100)
+
+    logger.debug("→ GET %s %r", url, params)
+    r = sess.get(url, params=params, timeout=120)
+
+    if not r.ok:
+        body = r.text
+        try:
+            err = r.json().get("error")
+        except ValueError:
+            err = None
+
+        logger.error(
+            "metagraph data fetch failed: %s %s\nResponse body (first 500 chars):\n%s\nParsed error: %r",
+            r.status_code,
+            r.reason,
+            body[:500],
+            err
+        )
     r.raise_for_status()
     return r.json()

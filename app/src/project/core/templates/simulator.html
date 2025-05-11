@@ -441,9 +441,8 @@
           const m = caseName.match(/^Case\s+(\d+)/i);
           return m ? parseInt(m[1],10) : 999999;
         }
-      
+        
         async function fetchAllCasesParallel() {
-
           console.log(
             "[DEBUG] fetchAllCasesParallel called",
             "validForms=" + validForms,
@@ -451,11 +450,10 @@
           );
           const chartWrapper = document.getElementById("chartWrapper");
 
-          if (useMetagraphEl.checked) {
-            chartWrapper.classList.add("metagraph");
-          } else {
-            chartWrapper.classList.remove("metagraph");
-          }
+          // toggle metagraph styling
+          if (useMetagraphEl.checked) chartWrapper.classList.add("metagraph");
+          else                     chartWrapper.classList.remove("metagraph");
+
           // show spinner while loading
           chartWrapper.innerHTML = `
             <div class="text-center">
@@ -464,50 +462,53 @@
 
           const simParams = yumasData.sim_params;
           const yParams   = yumasData.yuma_params;
-          const useMeta   = useMetagraphEl.checked;
 
-          if (useMeta) {
-            // ─── single metagraph call ─────────────────────────────────────
-            
+          if (useMetagraphEl.checked) {
+            // ─── metagraph call ────────────────────────────────────────────
             const url = new URL(metagraphUrl, window.location.origin);
-            console.log("[DEBUG] Fetching metagraph URL:", url.toString());
-            const res = await fetch(url);
-            console.log("[DEBUG] Metagraph response status:", res.status);
-            url.searchParams.set("kappa",                      simParams.kappa);
-            url.searchParams.set("bond_penalty",               simParams.bond_penalty);
-            url.searchParams.set("reset_bonds",                simParams.reset_bonds);
+            // set all params
+            url.searchParams.set("kappa",                       simParams.kappa);
+            url.searchParams.set("bond_penalty",                simParams.bond_penalty);
+            url.searchParams.set("reset_bonds",                 simParams.reset_bonds);
             url.searchParams.set("liquid_alpha_consensus_mode", simParams.liquid_alpha_consensus_mode);
-
-            url.searchParams.set("selected_yumas",             yumasData.selected_yuma_key);
-            url.searchParams.set("bond_moving_avg",            yParams.bond_moving_avg);
-            url.searchParams.set("liquid_alpha",               yParams.liquid_alpha);
-            url.searchParams.set("alpha_high",                 yParams.alpha_high);
-            url.searchParams.set("alpha_low",                  yParams.alpha_low);
-            url.searchParams.set("decay_rate",                 yParams.decay_rate);
-            url.searchParams.set("capacity_alpha",             yParams.capacity_alpha);
-            url.searchParams.set("alpha_sigmoid_steepness",    yParams.alpha_sigmoid_steepness);
-
-            url.searchParams.set("start_block",                startBlockEl.value);
-            url.searchParams.set("epochs_num",                 epochsNumEl.value);
-            url.searchParams.set("netuid",                     netuidEl.value);
-            url.searchParams.set("validators",                 validatorsEl.value);
+            url.searchParams.set("selected_yumas",              yumasData.selected_yuma_key);
+            url.searchParams.set("bond_moving_avg",             yParams.bond_moving_avg);
+            url.searchParams.set("liquid_alpha",                yParams.liquid_alpha);
+            url.searchParams.set("alpha_high",                  yParams.alpha_high);
+            url.searchParams.set("alpha_low",                   yParams.alpha_low);
+            url.searchParams.set("decay_rate",                  yParams.decay_rate);
+            url.searchParams.set("capacity_alpha",              yParams.capacity_alpha);
+            url.searchParams.set("alpha_sigmoid_steepness",     yParams.alpha_sigmoid_steepness);
+            url.searchParams.set("start_block",                 startBlockEl.value);
+            url.searchParams.set("epochs_num",                  epochsNumEl.value);
+            url.searchParams.set("netuid",                      netuidEl.value);
+            url.searchParams.set("validators",                  validatorsEl.value);
 
             try {
               const res  = await fetch(url);
-              if (!res.ok) throw new Error(`Status ${res.status}`);
               const html = await res.text();
-              chartWrapper.innerHTML = `
-                <div class="card shadow case-container mb-4">
-                  <div class="card-header"><strong>Metagraph Simulation</strong></div>
-                  <div class="card-body p-3">${html}</div>
-                </div>`;
+              if (!res.ok) {
+                // server‐side validation error (e.g. bad block range or invalid validators)
+                chartWrapper.innerHTML = `<div style="color:red;">${html}</div>`;
+              } else {
+                chartWrapper.innerHTML = `
+                  <div class="card shadow case-container mb-4">
+                    <div class="card-header"><strong>Metagraph Simulation</strong></div>
+                    <div class="card-body p-3">${html}</div>
+                  </div>`;
+              }
             } catch (err) {
               chartWrapper.innerHTML = `<div style="color:red;">Error: ${err.message}</div>`;
             }
 
           } else {
-            const sortedCases = [...selectedCases]
-                                  .sort((a,b)=> parseCaseNumber(a)-parseCaseNumber(b));
+            // ─── N single-case calls ────────────────────────────────────────
+            const sortedCases = [...selectedCases].sort((a, b) => {
+              const na = parseInt(a.match(/^Case\s+(\d+)/i)?.[1] || "0", 10);
+              const nb = parseInt(b.match(/^Case\s+(\d+)/i)?.[1] || "0", 10);
+              return na - nb;
+            });
+
             const promises = sortedCases.map(caseName => {
               const url = new URL(singleUrl, window.location.origin);
               url.searchParams.set("case_name",                   caseName);
@@ -515,7 +516,6 @@
               url.searchParams.set("bond_penalty",                simParams.bond_penalty);
               url.searchParams.set("reset_bonds",                 simParams.reset_bonds);
               url.searchParams.set("liquid_alpha_consensus_mode", simParams.liquid_alpha_consensus_mode);
-
               url.searchParams.set("chosen_yuma",                 yumasData.chosen_yuma);
               url.searchParams.set("bond_moving_avg",             yParams.bond_moving_avg);
               url.searchParams.set("liquid_alpha",                yParams.liquid_alpha);
@@ -526,7 +526,7 @@
               url.searchParams.set("alpha_sigmoid_steepness",     yParams.alpha_sigmoid_steepness);
 
               return fetch(url)
-                .then(r => { if(!r.ok) throw new Error(r.statusText); return r.text(); })
+                .then(r => { if (!r.ok) throw new Error(r.statusText); return r.text(); })
                 .then(html => ({
                   snippet: `
                     <div class="card shadow case-container mb-4">
@@ -550,6 +550,7 @@
         });
       
         document.addEventListener("DOMContentLoaded", () => {
+          // column-switch retention
           const switchEl = document.getElementById('colSwitch');
           const wrapper  = document.getElementById('chartWrapper');
           const KEY = 'forceOneColumn';
