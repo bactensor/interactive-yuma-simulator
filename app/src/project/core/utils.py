@@ -77,7 +77,7 @@ def fetch_metagraph_data(
     }
 
     logger.debug("→ GET %s %r", url, params)
-    r = sess.get(url, params=params, timeout=120)
+    r = sess.get(url, params=params, timeout=360)
 
     if not r.ok:
         body = r.text

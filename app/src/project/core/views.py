@@ -4,10 +4,10 @@ import re
 from dataclasses import asdict
 
 import pandas as pd
-from django.http import HttpResponse
+from django.http import HttpResponse, HttpResponseServerError
 from django.shortcuts import render
 from django.views.decorators.cache import cache_control
-from requests.exceptions import HTTPError
+from requests.exceptions import HTTPError, Timeout
 from yuma_simulation._internal.cases import get_synthetic_cases, instantiate_metagraph_case
 from yuma_simulation._internal.yumas import SimulationHyperparameters, YumaParams, YumaSimulationNames
 from yuma_simulation.v1 import api as yuma_api
@@ -205,6 +205,11 @@ def metagraph_simulation_view(request):
             start_block=start_block,
             end_block=end_block,
             netuid=netuid,
+        )
+    except Timeout:
+        return HttpResponseServerError(
+            "The service timed out. "
+            "Try requesting fewer epochs."
         )
     except HTTPError as e:
         if e.response is not None and e.response.status_code == 404:
