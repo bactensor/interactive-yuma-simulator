@@ -246,7 +246,7 @@ class YumaParamsForm(forms.Form):
         ),
     )
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, selected_yuma=None, **kwargs):
         super().__init__(*args, **kwargs)
 
         self.helper = FormHelper(self)
@@ -278,3 +278,14 @@ class YumaParamsForm(forms.Form):
                 # override fields are omitted entirely from the layout
             )
         )
+        self.selected_yuma = selected_yuma
+        if selected_yuma == 'YUMA1':
+            f = self.fields['bond_moving_avg']
+            f.required = False
+            self.initial['bond_moving_avg'] = 0.0
+    
+    def clean_bond_moving_avg(self):
+        val = self.cleaned_data.get('bond_moving_avg')
+        if self.selected_yuma == 'YUMA1':
+            return 0.0
+        return val

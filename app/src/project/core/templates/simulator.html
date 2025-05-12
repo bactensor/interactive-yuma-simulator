@@ -307,45 +307,53 @@
                     <div class="accordion-body">
                       {% crispy yuma_form %}
                       <script>
-                      document.addEventListener('DOMContentLoaded', () => {
-                        const liquidCheckbox = document.getElementById('id_liquid_alpha');
-                        const bondFieldset   = document.querySelectorAll('.bond-liquid-group');
-                        const alphaGroup     = document.querySelectorAll('.alpha-params-group');
-                        const decayGroup     = document.querySelectorAll('.decay-capacity-group');
-                        const yumaSelect     = document.getElementById('id_selected_yumas');
-                        const specialKeys = ['YUMA2C'];
-
-                        function updateLiquid() {
-                          const on = liquidCheckbox.checked;
-                          // disable bond_moving_avg input
-                          const bondInput = document.getElementById('id_bond_moving_avg');
-                          bondInput.classList.toggle('fake-disabled', on);
-                          // show/hide alpha rows
-                          alphaGroup.forEach(el => el.style.display = on ? 'flex' : 'none');
-                        }
-
-                        function updateYuma() {
-                          const val = yumaSelect.value;
-                          if ( specialKeys.includes(val) ) {
-                            // hide bond/liquid & alpha, show decay/capacity
-                            bondFieldset.forEach(el => el.style.display = 'none');
-                            alphaGroup.forEach(el => el.style.display = 'none');
-                            decayGroup.forEach(el => el.style.display = 'flex');
-                          } else {
-                            // normal YUMA – show bond/liquid, then respect `liquid` toggle, hide decay
-                            bondFieldset.forEach(el => el.style.display = 'flex');
-                            decayGroup.forEach(el => el.style.display = 'none');
-                            updateLiquid();
+                        document.addEventListener('DOMContentLoaded', () => {
+                          const liquidCheckbox = document.getElementById('id_liquid_alpha');
+                          const bondFieldset   = document.querySelectorAll('.bond-liquid-group');
+                          const alphaGroup     = document.querySelectorAll('.alpha-params-group');
+                          const decayGroup     = document.querySelectorAll('.decay-capacity-group');
+                          const yumaSelect     = document.getElementById('id_selected_yumas');
+                          const bondInput      = document.getElementById('id_bond_moving_avg');
+                          const specialKeys    = ['YUMA2C'];
+                        
+                          function updateLiquidVisibility() {
+                            const showAlpha = liquidCheckbox.checked;
+                            alphaGroup.forEach(el => el.style.display = showAlpha ? 'flex' : 'none');
+                            bondInput.classList.toggle('fake-disabled', showAlpha);
                           }
-                        }
-
-                        liquidCheckbox.addEventListener('change', updateLiquid);
-                        yumaSelect.addEventListener('change', updateYuma);
-
-                        // initialize correct state on page load
-                        updateYuma();
-                      });
-                      </script>
+                        
+                          function updateYuma() {
+                            const val = yumaSelect.value;
+                            const isY1 = (val === 'YUMA1');
+                        
+                            if (specialKeys.includes(val)) {
+                              bondFieldset.forEach(el => el.style.display = 'none');
+                              alphaGroup.forEach(el => el.style.display = 'none');
+                              decayGroup.forEach(el => el.style.display = 'flex');
+                            } else {
+                              bondFieldset.forEach(el => el.style.display = 'flex');
+                              decayGroup.forEach(el => el.style.display = 'none');
+                              updateLiquidVisibility();
+                            }
+                        
+                            if (isY1) {
+                              bondInput.value    = 0;
+                              bondInput.readOnly = true;
+                              bondInput.required = false;
+                              bondInput.classList.add('fake-disabled');
+                            } else {
+                              bondInput.readOnly = false;
+                              bondInput.required = true;
+                              bondInput.classList.remove('fake-disabled');
+                            }
+                          }
+                        
+                          liquidCheckbox.addEventListener('change', updateLiquidVisibility);
+                          yumaSelect.addEventListener('change', updateYuma);
+                        
+                          updateYuma();
+                        });
+                        </script>
                     </div>
                   </div>
                 </div>

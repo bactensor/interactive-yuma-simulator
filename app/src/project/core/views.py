@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 def simulation_view(request):
     selection_form = SelectionForm(request.GET or None)
     hyper_form = SimulationHyperparametersForm(request.GET or None)
-    yuma_form = YumaParamsForm(request.GET or None)
+    yuma_form = YumaParamsForm(request.GET or None, selected_yuma=request.GET.get('selected_yumas'),)
 
     context = {
         "selection_form": selection_form,
