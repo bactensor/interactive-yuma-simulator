@@ -30,6 +30,40 @@ class SelectionForm(forms.Form):
             }
         ),
     )
+    use_metagraph = forms.BooleanField(
+        required=False,
+        initial=False,
+        label="Metagraph Case",
+        widget=forms.CheckboxInput(attrs={"id": "id_use_metagraph"}),
+    )
+
+    start_block = forms.IntegerField(
+        required=False,
+        label="Start Block",
+        widget=forms.NumberInput(attrs={"class": "form-control", "id": "id_start_block"}),
+    )
+    epochs_num = forms.IntegerField(
+        required=False,
+        label="Number of Epochs",
+        min_value=1,
+        max_value=100,
+        error_messages={
+            "min_value": "You must run at least 1 epoch.",
+            "max_value": "You can request at most 100 epochs.",
+        },
+        widget=forms.NumberInput(attrs={"class": "form-control", "id": "id_epochs_num"}),
+    )
+    netuid = forms.IntegerField(
+        required=False,
+        label="Subnet ID",
+        widget=forms.NumberInput(attrs={"class": "form-control", "id": "id_netuid"}),
+    )
+    validators = forms.CharField(
+        required=False,
+        label="Validators IDs (comma-sep)",
+        widget=forms.TextInput(attrs={"class": "form-control", "id": "id_validators"}),
+    )
+
     selected_yumas = forms.ChoiceField(
         choices=[(k, v) for k, v in yumas_dict.items()],
         label="Select Yuma Version",
@@ -42,9 +76,25 @@ class SelectionForm(forms.Form):
         self.helper.disable_csrf = True
         self.helper.layout = Layout(
             Fieldset(
-                "",  # empty heading - set in template
-                # use Field instead of InlineCheckboxes
-                Field("selected_cases"),
+                "",
+                Div(
+                    Field("selected_cases"),
+                    css_class="mode-block",
+                    id="block_standard",
+                ),
+                Div(
+                    Field("use_metagraph"),
+                    Div(
+                        Field("start_block"),
+                        Field("epochs_num"),
+                        Field("netuid"),
+                        Field("validators"),
+                        css_class="ml-4",
+                        id="metagraph_params",
+                    ),
+                    css_class="mode-block",
+                    id="block_metagraph",
+                ),
                 Field("selected_yumas"),
             ),
         )
@@ -103,7 +153,11 @@ class SimulationHyperparametersForm(forms.Form):
                     Field("bond_penalty", wrapper_class="col-md-6 mb-3"),
                     css_class="row",
                 ),
-                Div(Field("reset_bonds", css_class="mb-3"), css_class="row"),
+                Div(
+                    Field("reset_bonds", css_class="mb-3"),
+                    css_class="row",
+                    id="row_reset_bonds",
+                ),
                 Div(Field("liquid_alpha_consensus_mode", css_class="mb-3"), css_class="row"),
             )
         )
@@ -192,7 +246,7 @@ class YumaParamsForm(forms.Form):
         ),
     )
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, selected_yuma=None, **kwargs):
         super().__init__(*args, **kwargs)
 
         self.helper = FormHelper(self)
@@ -224,3 +278,14 @@ class YumaParamsForm(forms.Form):
                 # override fields are omitted entirely from the layout
             )
         )
+        self.selected_yuma = selected_yuma
+        if selected_yuma == 'YUMA1':
+            f = self.fields['bond_moving_avg']
+            f.required = False
+            self.initial['bond_moving_avg'] = 0.0
+    
+    def clean_bond_moving_avg(self):
+        val = self.cleaned_data.get('bond_moving_avg')
+        if self.selected_yuma == 'YUMA1':
+            return 0.0
+        return val

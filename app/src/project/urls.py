@@ -4,7 +4,7 @@ from django.urls import include, path
 from django.views.generic import RedirectView
 
 from .core.consumers import DefaultConsumer
-from .core.views import simulate_single_case_view, simulation_view
+from .core.views import metagraph_simulation_view, simulate_single_case_view, simulation_view
 
 urlpatterns = [
     path("admin/", site.urls),
@@ -12,6 +12,7 @@ urlpatterns = [
     path("", RedirectView.as_view(url="/simulator/", permanent=False)),
     path("simulator/", simulation_view, name="simulation_view"),
     path("simulate_single_case/", simulate_single_case_view, name="simulate_single_case"),
+    path("simulate_metagraph/", metagraph_simulation_view, name="metagraph_simulation"),
 ]
 ws_urlpatterns = [
     path("ws/v0/", DefaultConsumer.as_asgi()),

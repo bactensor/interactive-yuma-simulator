@@ -1,9 +1,6 @@
-"""
-Django settings for project project.
-"""
-
 import inspect
 import logging
+import os
 from functools import wraps
 
 import environ
@@ -305,3 +302,7 @@ if SENTRY_DSN := env("SENTRY_DSN", default=""):
 
 CRISPY_ALLOWED_TEMPLATE_PACKS = "bootstrap5"
 CRISPY_TEMPLATE_PACK = "bootstrap5"
+
+MGRAPH_BASE_URL = os.environ.get("MGRAPH_BASE_URL", "")
+MGRAPH_USERNAME = os.environ.get("MGRAPH_USERNAME", "")
+MGRAPH_PASSWORD = os.environ.get("MGRAPH_PASSWORD", "")
