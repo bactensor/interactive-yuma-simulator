@@ -80,6 +80,7 @@ def fetch_metagraph_data(
     r = sess.get(url, params=params, timeout=360)
 
     if not r.ok:
+        headers = dict(r.headers)
         body = r.text
         try:
             err = r.json().get("error")
@@ -87,11 +88,18 @@ def fetch_metagraph_data(
             err = None
 
         logger.error(
-            "metagraph data fetch failed: %s %s\nResponse body (first 500 chars):\n%s\nParsed error: %r",
+            "metagraph data fetch failed: %s %s\n"
+            "Response headers:\n%s\n"
+            "Response body (first 500 chars):\n%s\n"
+            "Parsed error: %r",
             r.status_code,
             r.reason,
+            headers,
             body[:500],
             err,
         )
-    r.raise_for_status()
+
+        http_err = requests.HTTPError(f"{r.status_code} {r.reason}", response=r)
+        raise http_err
+
     return r.json()

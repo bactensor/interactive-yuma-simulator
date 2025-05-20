@@ -422,6 +422,7 @@
         const epochsNumEl    = document.getElementById('id_epochs_num');
         const netuidEl       = document.getElementById('id_netuid');
         const validatorsEl   = document.getElementById('id_validators');
+        const minersEl = document.getElementById('id_miners');
       
         const validForms    = ("{{ valid_forms|yesno:'true,false' }}" === "true");
         const selectedCases = JSON.parse('{{ cases_json|escapejs }}');
@@ -474,6 +475,7 @@
             url.searchParams.set("epochs_num",                  epochsNumEl.value);
             url.searchParams.set("netuid",                      netuidEl.value);
             url.searchParams.set("validators",                  validatorsEl.value);
+            url.searchParams.set("miners",    minersEl.value);
 
             try {
               const res  = await fetch(url);
