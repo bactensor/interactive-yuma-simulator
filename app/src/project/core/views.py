@@ -159,7 +159,7 @@ def simulate_single_case_view(request):
 
     return HttpResponse(partial_html.data if partial_html else "No data", status=200)
 
-
+@cache_control(public=True, max_age=604800, s_maxage=604800)
 def metagraph_simulation_view(request):
     try:
         raw_kappa = float(request.GET.get("kappa", 32767))
