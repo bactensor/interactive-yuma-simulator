@@ -76,6 +76,7 @@ def simulation_view(request):
                 "bond_penalty": hyper_data["bond_penalty"],
                 "reset_bonds": hyper_data["reset_bonds"],
                 "liquid_alpha_consensus_mode": hyper_data["liquid_alpha_consensus_mode"],
+                "alpha_tao_ratio": hyper_data["alpha_tao_ratio"],
             }
             yuma_params = {
                 "bond_moving_avg": yuma_data["bond_moving_avg"],
@@ -184,6 +185,8 @@ def metagraph_simulation_view(request):
 
         raw_miners = request.GET.get("miners","")
         miners_ids = [int(m.strip()) for m in raw_miners.split(",") if m.strip()]
+
+        raw_alpha_tao = float(request.GET.get("alpha_tao_ratio", 0.1))
         
     except ValueError as e:
         return HttpResponse(f"Invalid parameter: {e}", status=400)
@@ -192,6 +195,7 @@ def metagraph_simulation_view(request):
         kappa=normalize(raw_kappa, UINT16_MAX),
         bond_penalty=normalize(raw_bond_penalty, UINT16_MAX),
         liquid_alpha_consensus_mode=lam,
+        alpha_tao_ratio=raw_alpha_tao,
     )
     yuma_params = YumaParams(
         bond_moving_avg=normalize(raw_bma, ONE_MILLION),
@@ -232,10 +236,17 @@ def metagraph_simulation_view(request):
     except ValueError as e:
         return HttpResponse(str(e), status=400)
 
-    selected_yumas = [(asdict(YumaSimulationNames())[chosen_yuma], yuma_params)]
+    selected_chart_yumas = [(asdict(YumaSimulationNames())[chosen_yuma], yuma_params)]
+    all_yumas = list(asdict(YumaSimulationNames()).values())
+    summary_versions = [
+        (display_name, yuma_params)
+        for display_name in all_yumas
+        if display_name not in ("Yuma 1", "Yuma 3 (Rhef+relative bonds)")
+    ]
 
     partial_html = generate_metagraph_based_chart_table(
-        yuma_versions=selected_yumas,
+        chart_versions=selected_chart_yumas,
+        summary_versions=summary_versions,
         normal_case=case,
         yuma_hyperparameters=sim_params,
         epochs_padding=0,

@@ -166,6 +166,13 @@ class SimulationHyperparametersForm(forms.Form):
         label="Liquid Alpha Consensus Mode",
     )
 
+    alpha_tao_ratio = forms.FloatField(
+        initial=0.1,
+        min_value=0.0,
+        label="Alpha Tao Ratio",
+        error_messages={"min_value": "Must be positive."},
+    )
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -187,6 +194,11 @@ class SimulationHyperparametersForm(forms.Form):
                     id="row_reset_bonds",
                 ),
                 Div(Field("liquid_alpha_consensus_mode", css_class="mb-3"), css_class="row"),
+                Div(
+                    Field("alpha_tao_ratio", wrapper_class="col-md-6 mb-3"),
+                    css_class="row",
+                    id="row_alpha_tao_ratio"
+                ),
             )
         )
 
