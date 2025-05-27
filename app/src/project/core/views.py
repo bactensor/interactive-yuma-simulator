@@ -216,7 +216,7 @@ def metagraph_simulation_view(request):
         )
     except Timeout:
         return HttpResponseServerError(
-            "The service timed out. "
+            "The service timed out."
             "Try requesting fewer epochs."
         )
     except HTTPError as e:
