@@ -64,6 +64,13 @@ class SelectionForm(forms.Form):
         widget=forms.TextInput(attrs={"class": "form-control", "id": "id_validators"}),
     )
 
+    miners = forms.CharField(
+        required=False,
+        label="Miners IDs (comma-sep)",
+        help_text="Up to 10 miner IDs (comma-separated)",
+        widget=forms.TextInput(attrs={"class": "form-control", "id": "id_miners"}),
+    )
+
     selected_yumas = forms.ChoiceField(
         choices=[(k, v) for k, v in yumas_dict.items()],
         label="Select Yuma Version",
@@ -89,6 +96,7 @@ class SelectionForm(forms.Form):
                         Field("epochs_num"),
                         Field("netuid"),
                         Field("validators"),
+                        Field("miners"),
                         css_class="ml-4",
                         id="metagraph_params",
                     ),
@@ -98,6 +106,26 @@ class SelectionForm(forms.Form):
                 Field("selected_yumas"),
             ),
         )
+
+    def clean_miners(self):
+        raw = self.cleaned_data.get("miners", "")
+        if not raw:
+            return []
+        parts = [tok.strip() for tok in raw.split(",") if tok.strip()]
+        if len(parts) > 10:
+            raise forms.ValidationError("You can specify at most 10 miner IDs.")
+
+        out: list[int] = []
+        for tok in parts:
+            try:
+                m = int(tok)
+            except ValueError:
+                raise forms.ValidationError(f"‘{tok}’ is not a valid integer.")
+            if not (0 <= m <= 255):
+                raise forms.ValidationError(f"Miner ID {m} must be between 0 and 255.")
+            out.append(m)
+
+        return out
 
 
 class SimulationHyperparametersForm(forms.Form):
@@ -138,6 +166,13 @@ class SimulationHyperparametersForm(forms.Form):
         label="Liquid Alpha Consensus Mode",
     )
 
+    alpha_tao_ratio = forms.FloatField(
+        initial=0.1,
+        min_value=0.0,
+        label="Alpha Tao Ratio",
+        error_messages={"min_value": "Must be positive."},
+    )
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -159,6 +194,11 @@ class SimulationHyperparametersForm(forms.Form):
                     id="row_reset_bonds",
                 ),
                 Div(Field("liquid_alpha_consensus_mode", css_class="mb-3"), css_class="row"),
+                Div(
+                    Field("alpha_tao_ratio", wrapper_class="col-md-6 mb-3"),
+                    css_class="row",
+                    id="row_alpha_tao_ratio"
+                ),
             )
         )
 

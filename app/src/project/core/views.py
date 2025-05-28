@@ -8,7 +8,7 @@ from django.http import HttpResponse, HttpResponseServerError
 from django.shortcuts import render
 from django.views.decorators.cache import cache_control
 from requests.exceptions import HTTPError, Timeout
-from yuma_simulation._internal.cases import get_synthetic_cases, instantiate_metagraph_case
+from yuma_simulation._internal.cases import get_synthetic_cases, MetagraphCase
 from yuma_simulation._internal.yumas import SimulationHyperparameters, YumaParams, YumaSimulationNames
 from yuma_simulation.v1 import api as yuma_api
 from yuma_simulation.v1.api import generate_chart_table, generate_metagraph_based_chart_table
@@ -76,6 +76,7 @@ def simulation_view(request):
                 "bond_penalty": hyper_data["bond_penalty"],
                 "reset_bonds": hyper_data["reset_bonds"],
                 "liquid_alpha_consensus_mode": hyper_data["liquid_alpha_consensus_mode"],
+                "alpha_tao_ratio": hyper_data["alpha_tao_ratio"],
             }
             yuma_params = {
                 "bond_moving_avg": yuma_data["bond_moving_avg"],
@@ -159,7 +160,7 @@ def simulate_single_case_view(request):
 
     return HttpResponse(partial_html.data if partial_html else "No data", status=200)
 
-
+@cache_control(public=True, max_age=604800, s_maxage=604800)
 def metagraph_simulation_view(request):
     try:
         raw_kappa = float(request.GET.get("kappa", 32767))
@@ -181,6 +182,12 @@ def metagraph_simulation_view(request):
 
         raw_validators = request.GET.get("validators", "")
         validators = [int(v.strip()) for v in raw_validators.split(",") if v.strip()]
+
+        raw_miners = request.GET.get("miners","")
+        miners_ids = [int(m.strip()) for m in raw_miners.split(",") if m.strip()]
+
+        raw_alpha_tao = float(request.GET.get("alpha_tao_ratio", 0.1))
+        
     except ValueError as e:
         return HttpResponse(f"Invalid parameter: {e}", status=400)
 
@@ -188,6 +195,7 @@ def metagraph_simulation_view(request):
         kappa=normalize(raw_kappa, UINT16_MAX),
         bond_penalty=normalize(raw_bond_penalty, UINT16_MAX),
         liquid_alpha_consensus_mode=lam,
+        alpha_tao_ratio=raw_alpha_tao,
     )
     yuma_params = YumaParams(
         bond_moving_avg=normalize(raw_bma, ONE_MILLION),
@@ -208,7 +216,7 @@ def metagraph_simulation_view(request):
         )
     except Timeout:
         return HttpResponseServerError(
-            "The service timed out. "
+            "The service timed out."
             "Try requesting fewer epochs."
         )
     except HTTPError as e:
@@ -219,17 +227,26 @@ def metagraph_simulation_view(request):
         return HttpResponse(f"Error fetching metagraph data: {e}", status=400)
 
     try:
-        case = instantiate_metagraph_case(
+        case = MetagraphCase.from_mg_dumper_data(
             mg_data=mg_data,
             top_validators_ids=validators,
-        )
+            netuid=netuid,
+            selected_miners=miners_ids,
+            )
     except ValueError as e:
         return HttpResponse(str(e), status=400)
 
-    selected_yumas = [(asdict(YumaSimulationNames())[chosen_yuma], yuma_params)]
+    selected_chart_yumas = [(asdict(YumaSimulationNames())[chosen_yuma], yuma_params)]
+    all_yumas = list(asdict(YumaSimulationNames()).values())
+    summary_versions = [
+        (display_name, yuma_params)
+        for display_name in all_yumas
+        if display_name not in ("Yuma 1", "Yuma 3 (Rhef+relative bonds)")
+    ]
 
     partial_html = generate_metagraph_based_chart_table(
-        yuma_versions=selected_yumas,
+        chart_versions=selected_chart_yumas,
+        summary_versions=summary_versions,
         normal_case=case,
         yuma_hyperparameters=sim_params,
         epochs_padding=0,
@@ -275,6 +292,7 @@ def check_validators(
         form.add_error("start_block", f"Error fetching metagraph data: {e}")
         return None
 
+
     # extract uids & stakes
     uids = mg_data.get("uids", [])
     stakes = mg_data.get("stakes", {})
@@ -314,40 +332,43 @@ def bootstrap_generate_ipynb_table(
     if summary_table is None:
         summary_table = pd.DataFrame(table_data)
 
-    # helper: extract just the src URL from the <img> tag
+    cols = list(summary_table.columns)
+    rows_html: list[str] = []
+
     def parse_img_src(html_str: str) -> str:
         m = re.search(r'src="([^"]+)"', html_str)
         return m.group(1) if m else ""
 
-    rows = []
-    num_rows = len(summary_table)
-
-    for i in range(num_rows):
-        # figure out which case this row belongs to
-        case_name = next(
-            (summary_table.columns[c_idx] for start, end, c_idx in case_row_ranges if start <= i <= end),
-            summary_table.columns[0],
+    for i in range(len(summary_table)):
+        # find a matching (start,end,c_idx) where c_idx is in-bounds
+        match = next(
+            ((start, end, c_idx) for start, end, c_idx in case_row_ranges
+             if start <= i <= end and 0 <= c_idx < len(cols)),
+            None
         )
+        if match:
+            _, _, c_idx = match
+        else:
+            # fallback to the first column
+            c_idx = 0
 
-        raw_img_tag = summary_table.at[i, case_name]
+        case_name = cols[c_idx]
+        raw_img_tag = summary_table.iat[i, c_idx]
         img_src = parse_img_src(raw_img_tag)
 
-        # full-width, single-row layout:
-        rows.append(f"""
+        rows_html.append(f'''
           <div class="mb-4 text-center">
             <img src="{img_src}"
                  class="img-fluid w-100"
                  alt="Chart for {case_name}">
           </div>
-        """)
+        ''')
 
-    # wrap everything in a single container
-    return f"""
+    return f'''
     <div class="container-fluid px-3">
-      {"".join(rows)}
+      {''.join(rows_html)}
     </div>
-    """
+    '''
 
 
-# Now override the external lib’s function:
 yuma_api._generate_ipynb_table = bootstrap_generate_ipynb_table

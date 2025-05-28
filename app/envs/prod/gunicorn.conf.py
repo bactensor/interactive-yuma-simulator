@@ -13,3 +13,4 @@ preload_app = env.bool("GUNICORN_PRELOAD_APP", True)
 bind = "unix:/var/run/gunicorn/gunicorn.sock"
 wsgi_app = "project.wsgi:application"
 access_logfile = "-"
+timeout = env.int("GUNICORN_TIMEOUT", 180)
