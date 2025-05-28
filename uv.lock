@@ -3423,7 +3423,7 @@ dependencies = [
     { name = "widgetsnbextension" },
 ]
 wheels = [
-    { filename = "yuma_simulation-0.1.1-py3-none-any.whl", hash = "sha256:9a2b215bbc8d66ee923589b08a19339731a21595842e41cb3ea83f428767bae2" },
+    { filename = "yuma_simulation-0.1.1-py3-none-any.whl", hash = "sha256:fbc6fafc9fdf395e046b7d2b58a83269cf0d2029d12e05e3a2a6ba7023a2353d" },
 ]
 
 [package.metadata]
