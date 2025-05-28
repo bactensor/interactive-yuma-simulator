@@ -2,6 +2,10 @@ import json
 import logging
 import re
 from dataclasses import asdict
+from datetime import datetime, timedelta
+from django.http import HttpResponseBadRequest
+from django.conf import settings
+
 
 import pandas as pd
 from django.http import HttpResponse, HttpResponseServerError
@@ -41,17 +45,16 @@ def simulation_view(request):
         cleaned = selection_form.cleaned_data
 
         if cleaned.get("use_metagraph", False):
-            start = cleaned["start_block"]
+            start = cleaned["start_date"]
             netuid = cleaned["netuid"]
             raw_validators = cleaned.get("validators", "")
 
             picked_validators = check_validators(
                 selection_form,
-                start_block=start,
+                start_date=start,
                 netuid=netuid,
                 raw_validators=raw_validators,
             )
-
             if picked_validators is not None:
                 cleaned["validators"] = picked_validators
 
@@ -96,7 +99,7 @@ def simulation_view(request):
                     "yuma_params": yuma_params,
                 }
             )
-
+            
     return render(request, "simulator.html", context)
 
 
@@ -176,8 +179,15 @@ def metagraph_simulation_view(request):
         cap_alpha = float(request.GET.get("capacity_alpha", 0.1))
         steepness = float(request.GET.get("alpha_sigmoid_steepness", 10.0))
 
-        start_block = int(request.GET.get("start_block", 0))
-        epochs_num = int(request.GET.get("epochs_num", 0))
+        raw_start = request.GET.get("start_date")
+        raw_end   = request.GET.get("end_date")
+
+        try:
+            start_date = datetime.fromisoformat(raw_start) if raw_start else None
+            end_date   = datetime.fromisoformat(raw_end)   if raw_end   else None
+        except ValueError:
+            return HttpResponseBadRequest("Dates must be in YYYY-MM-DD format.")
+        
         netuid = int(request.GET.get("netuid", 0))
 
         raw_validators = request.GET.get("validators", "")
@@ -207,11 +217,13 @@ def metagraph_simulation_view(request):
         alpha_sigmoid_steepness=steepness,
     )
 
-    end_block = start_block + epochs_num * 360
+    epochs_padding = int(settings.EPOCHS_PADDING)
+    start_date = start_date - timedelta(seconds=360 * 12 * epochs_padding)
+
     try:
         mg_data = fetch_metagraph_data(
-            start_block=start_block,
-            end_block=end_block,
+            start_date=start_date,
+            end_date=end_date,
             netuid=netuid,
         )
     except Timeout:
@@ -221,7 +233,7 @@ def metagraph_simulation_view(request):
         )
     except HTTPError as e:
         if e.response is not None and e.response.status_code == 404:
-            return HttpResponse(f"No metagraph data for blocks {start_block}–{end_block}", status=404)
+            return HttpResponse(f"No metagraph data for timespan {start_date}–{end_date}", status=404)
         return HttpResponse(f"Error fetching metagraph data: {e}", status=400)
     except Exception as e:
         return HttpResponse(f"Error fetching metagraph data: {e}", status=400)
@@ -249,7 +261,7 @@ def metagraph_simulation_view(request):
         summary_versions=summary_versions,
         normal_case=case,
         yuma_hyperparameters=sim_params,
-        epochs_padding=0,
+        epochs_padding=epochs_padding,
     )
 
     return HttpResponse(partial_html.data or "No data", status=200)
@@ -257,7 +269,7 @@ def metagraph_simulation_view(request):
 
 def check_validators(
     form,
-    start_block: int,
+    start_date: datetime,
     netuid: int,
     raw_validators: str,
     stake_threshold: int = 1000,
@@ -271,8 +283,8 @@ def check_validators(
     """
     try:
         mg_data = fetch_metagraph_data(
-            start_block=start_block,
-            end_block=start_block,
+            start_date=start_date,
+            end_date=start_date + pd.Timedelta(hours=2),
             netuid=netuid,
         )
     except HTTPError as e:
@@ -283,13 +295,13 @@ def check_validators(
         except ValueError:
             detail = resp.text[:200]
         if resp.status_code == 404:
-            msg = f"No metagraph data for block {start_block}"
+            msg = f"No metagraph data for date {start_date}"
         else:
             msg = f"Error fetching metagraph data ({resp.status_code}): {detail}"
-        form.add_error("start_block", msg)
+        form.add_error("start_date", msg)
         return None
     except Exception as e:
-        form.add_error("start_block", f"Error fetching metagraph data: {e}")
+        form.add_error("start_date", f"Error fetching metagraph data: {e}")
         return None
 
 
@@ -297,11 +309,11 @@ def check_validators(
     uids = mg_data.get("uids", [])
     stakes = mg_data.get("stakes", {})
     if not stakes:
-        form.add_error("start_block", "Metagraph returned no stakes data")
+        form.add_error("start_date", "Metagraph returned no stakes data")
         return None
 
-    first_epoch = next(iter(stakes))
-    first_stakes = stakes[first_epoch]
+    first_block = next(iter(stakes))
+    first_stakes = stakes[first_block]
     valid_idxs = {int(idx_str) for idx_str, stake in first_stakes.items() if stake > stake_threshold}
     valid_uids = {uids[i] for i in valid_idxs if i < len(uids)}
 
@@ -319,7 +331,7 @@ def check_validators(
 
         picked_validators.append(vid)
         if vid not in valid_uids:
-            form.add_error("validators", f"Validator ID {vid} has zero stake in epoch {first_epoch}")
+            form.add_error("validators", f"Validator ID {vid} has zero stake in block {first_block}")
 
     return picked_validators
 

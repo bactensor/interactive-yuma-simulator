@@ -306,3 +306,5 @@ CRISPY_TEMPLATE_PACK = "bootstrap5"
 MGRAPH_BASE_URL = os.environ.get("MGRAPH_BASE_URL", "")
 MGRAPH_USERNAME = os.environ.get("MGRAPH_USERNAME", "")
 MGRAPH_PASSWORD = os.environ.get("MGRAPH_PASSWORD", "")
+
+EPOCHS_PADDING = os.environ.get("EPOCHS_PADDING", "10")
