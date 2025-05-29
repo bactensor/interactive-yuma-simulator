@@ -497,8 +497,8 @@ body {
         const metagraphUrl = "{% url 'metagraph_simulation' %}";
       
         const useMetagraphEl = document.getElementById('id_use_metagraph');
-        const startBlockEl   = document.getElementById('id_start_block');
-        const epochsNumEl    = document.getElementById('id_epochs_num');
+        const startDateEl = document.getElementById('id_start_date');
+        const endDateEl   = document.getElementById('id_end_date');
         const netuidEl       = document.getElementById('id_netuid');
         const validatorsEl   = document.getElementById('id_validators');
         const minersEl = document.getElementById('id_miners');
@@ -551,8 +551,8 @@ body {
             url.searchParams.set("decay_rate",                  yParams.decay_rate);
             url.searchParams.set("capacity_alpha",              yParams.capacity_alpha);
             url.searchParams.set("alpha_sigmoid_steepness",     yParams.alpha_sigmoid_steepness);
-            url.searchParams.set("start_block",                 startBlockEl.value);
-            url.searchParams.set("epochs_num",                  epochsNumEl.value);
+            url.searchParams.set("start_date",                 startDateEl.value);
+            url.searchParams.set("end_date",                  endDateEl.value);
             url.searchParams.set("netuid",                      netuidEl.value);
             url.searchParams.set("validators",                  validatorsEl.value);
             url.searchParams.set("miners",    minersEl.value);
@@ -738,5 +738,20 @@ body {
     updateMetagraphToggle();
   });
 </script>
+
+<script>
+  const startInput = document.getElementById('id_start_date');
+  const endInput   = document.getElementById('id_end_date');
+  startInput.addEventListener('change', () => {
+    const start = new Date(startInput.value);
+    if (!isNaN(start)) {
+      endInput.min = start.toISOString().substring(0,19);
+      const max = new Date(start.getTime() + 3*24*60*60*1000);
+      endInput.max = max.toISOString().substring(0,19);
+    }
+  });
+</script>
+
 </body>
 </html>
+

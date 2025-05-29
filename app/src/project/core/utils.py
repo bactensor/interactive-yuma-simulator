@@ -1,8 +1,10 @@
 import logging
 import re
 from urllib.parse import urljoin
+from datetime import datetime
 
 import requests
+import pandas as pd
 from django.conf import settings
 from django.core.cache import cache
 
@@ -64,15 +66,15 @@ def get_metagraph_session() -> requests.Session:
 
 
 def fetch_metagraph_data(
-    start_block: int,
-    end_block: int,
+    start_date: datetime,
+    end_date: datetime,
     netuid: int,
 ) -> dict:
     sess = get_metagraph_session()
     url = urljoin(settings.MGRAPH_BASE_URL, "metagraph-data/")
     params = {
-        "start_block": start_block,
-        "end_block": end_block,
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
         "netuid": netuid,
     }
 

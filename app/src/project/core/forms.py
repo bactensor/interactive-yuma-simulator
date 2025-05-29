@@ -1,8 +1,12 @@
 from dataclasses import asdict
+from datetime import timedelta
 
 from crispy_forms.helper import FormHelper
 from crispy_forms.layout import Div, Field, Fieldset, Layout
 from django import forms
+from django.utils import timezone
+from datetime import timezone as dt_timezone
+
 from yuma_simulation._internal.cases import cases
 from yuma_simulation._internal.yumas import YumaSimulationNames
 
@@ -37,22 +41,32 @@ class SelectionForm(forms.Form):
         widget=forms.CheckboxInput(attrs={"id": "id_use_metagraph"}),
     )
 
-    start_block = forms.IntegerField(
+    start_date = forms.DateTimeField(
         required=False,
-        label="Start Block",
-        widget=forms.NumberInput(attrs={"class": "form-control", "id": "id_start_block"}),
+        label="Start Date (UTC)",
+        widget=forms.DateTimeInput(
+            attrs={
+                "class": "form-control",
+                "id": "id_start_date",
+                "type": "datetime-local",
+                "step": "1",
+            }
+        ),
     )
-    epochs_num = forms.IntegerField(
+
+    end_date = forms.DateTimeField(
         required=False,
-        label="Number of Epochs",
-        min_value=1,
-        max_value=100,
-        error_messages={
-            "min_value": "You must run at least 1 epoch.",
-            "max_value": "You can request at most 100 epochs.",
-        },
-        widget=forms.NumberInput(attrs={"class": "form-control", "id": "id_epochs_num"}),
+        label="End Date (UTC)",
+        widget=forms.DateTimeInput(
+            attrs={
+                "class": "form-control",
+                "id": "id_end_date",
+                "type": "datetime-local",
+                "step": "1",     
+            }
+        ),
     )
+
     netuid = forms.IntegerField(
         required=False,
         label="Subnet ID",
@@ -73,11 +87,32 @@ class SelectionForm(forms.Form):
 
     selected_yumas = forms.ChoiceField(
         choices=[(k, v) for k, v in yumas_dict.items()],
+        initial="YUMA2",
         label="Select Yuma Version",
     )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+        if not self.is_bound:
+            self.fields['selected_yumas'].initial = 'YUMA2'
+
+        now_utc   = timezone.now().astimezone(dt_timezone.utc)
+        now_naive = now_utc.replace(tzinfo=None)
+        ts        = now_naive.isoformat(timespec='seconds')
+
+        three_weeks_ago   = (now_naive - timedelta(weeks=3)).isoformat(timespec='seconds')
+        three_days_future = (now_naive + timedelta(days=3)).isoformat(timespec='seconds')
+
+        self.fields['start_date'].widget.attrs.update({
+            'min': three_weeks_ago,
+            'max': ts,
+        })
+        self.fields['end_date'].widget.attrs.update({
+            'min': three_weeks_ago,
+            'max': three_days_future,
+        })
+        
         self.helper = FormHelper(self)
         self.helper.form_tag = False
         self.helper.disable_csrf = True
@@ -92,8 +127,8 @@ class SelectionForm(forms.Form):
                 Div(
                     Field("use_metagraph"),
                     Div(
-                        Field("start_block"),
-                        Field("epochs_num"),
+                        Field("start_date"),
+                        Field("end_date"),
                         Field("netuid"),
                         Field("validators"),
                         Field("miners"),
@@ -106,6 +141,35 @@ class SelectionForm(forms.Form):
                 Field("selected_yumas"),
             ),
         )
+
+    def clean(self):
+        cleaned = super().clean()
+        if cleaned.get('use_metagraph'):
+            start = cleaned.get('start_date')
+            end   = cleaned.get('end_date')
+
+            now_utc = timezone.now().astimezone(dt_timezone.utc)
+
+
+            start_utc = start.astimezone(dt_timezone.utc)
+            end_utc   = end.astimezone(dt_timezone.utc)
+
+            if not start or not end:
+                raise forms.ValidationError("Both start and end datetimes are required.")
+
+            if start_utc > now_utc:
+                self.add_error('start_date', "Start cannot be in the future.")
+            if end_utc > now_utc:
+                self.add_error('end_date',   "End cannot be in the future.")
+
+            if start_utc < now_utc - timedelta(weeks=3):
+                self.add_error('start_date', "Start cannot be more than 3 weeks ago.")
+            if end_utc > start_utc + timedelta(days=3):
+                self.add_error('end_date',   "End cannot be more than 3 days after start.")
+
+            if end_utc < start_utc:
+                self.add_error('end_date',   "End cannot be before start.")
+        return cleaned
 
     def clean_miners(self):
         raw = self.cleaned_data.get("miners", "")
