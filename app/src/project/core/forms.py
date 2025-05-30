@@ -23,6 +23,7 @@ class SelectionForm(forms.Form):
     selected_cases = forms.MultipleChoiceField(
         choices=[(c.name, c.name) for c in cases],
         required=True,
+        initial=["Case 2 - kappa moves second"],
         label="Select Cases",
         widget=forms.SelectMultiple(
             attrs={
@@ -96,6 +97,9 @@ class SelectionForm(forms.Form):
 
         if not self.is_bound:
             self.fields['selected_yumas'].initial = 'YUMA2'
+            self.fields['selected_cases'].initial = [
+                "Case 2 - kappa moves second"
+            ]
 
         now_utc   = timezone.now().astimezone(dt_timezone.utc)
         now_naive = now_utc.replace(tzinfo=None)
