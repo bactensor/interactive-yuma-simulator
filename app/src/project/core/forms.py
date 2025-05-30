@@ -16,9 +16,6 @@ yumas_dict = asdict(YumaSimulationNames())
 del yumas_dict["YUMA3_LIQUID"]
 
 
-# WARNING: Refactored to cripsy forms by AI - review and maybe refactor
-
-
 class SelectionForm(forms.Form):
     selected_cases = forms.MultipleChoiceField(
         choices=[(c.name, c.name) for c in cases],
