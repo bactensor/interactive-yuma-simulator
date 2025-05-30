@@ -331,7 +331,7 @@ def check_validators(
 
         picked_validators.append(vid)
         if vid not in valid_uids:
-            form.add_error("validators", f"Validator ID {vid} has zero stake in block {first_block}")
+            form.add_error("validators", f"Validator ID {vid} has <1000 stake in block {first_block}")
 
     return picked_validators
 
