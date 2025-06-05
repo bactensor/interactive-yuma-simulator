@@ -7,8 +7,8 @@ from django import forms
 from django.utils import timezone
 from datetime import timezone as dt_timezone
 
-from yuma_simulation._internal.cases import cases
-from yuma_simulation._internal.yumas import YumaSimulationNames
+from project.yuma_simulation._internal.cases import cases
+from project.yuma_simulation._internal.yumas import YumaSimulationNames
 
 yumas_dict = asdict(YumaSimulationNames())
 
