@@ -8,7 +8,6 @@ COPY --from=ghcr.io/astral-sh/uv:0.5 /uv /uvx /bin/
 
 WORKDIR /root/src/
 
-COPY ./yuma_simulation /root/src/yuma_simulation
 COPY pyproject.toml uv.lock ./
 
 # Enable bytecode compilation
