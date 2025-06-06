@@ -12,10 +12,10 @@ from django.http import HttpResponse, HttpResponseServerError
 from django.shortcuts import render
 from django.views.decorators.cache import cache_control
 from requests.exceptions import HTTPError, Timeout
-from yuma_simulation._internal.cases import get_synthetic_cases, MetagraphCase
-from yuma_simulation._internal.yumas import SimulationHyperparameters, YumaParams, YumaSimulationNames
-from yuma_simulation.v1 import api as yuma_api
-from yuma_simulation.v1.api import generate_chart_table, generate_metagraph_based_chart_table
+from project.yuma_simulation._internal.cases import get_synthetic_cases, MetagraphCase
+from project.yuma_simulation._internal.yumas import SimulationHyperparameters, YumaParams, YumaSimulationNames
+from project.yuma_simulation.v1 import api as yuma_api
+from project.yuma_simulation.v1.api import generate_chart_table, generate_metagraph_based_chart_table
 
 from .forms import SelectionForm, SimulationHyperparametersForm, YumaParamsForm
 from .utils import ONE_MILLION, UINT16_MAX, fetch_metagraph_data, normalize
