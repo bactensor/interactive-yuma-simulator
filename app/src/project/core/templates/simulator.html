@@ -506,6 +506,7 @@ body {
         const validForms    = ("{{ valid_forms|yesno:'true,false' }}" === "true");
         const selectedCases = JSON.parse('{{ cases_json|escapejs }}');
         const yumasData     = JSON.parse('{{ yumas_json|escapejs }}');
+        const cache_key = "{{ cache_key }}";
 
         const simForm = document.getElementById('simulationForm');
 
@@ -556,6 +557,7 @@ body {
             url.searchParams.set("netuid",                      netuidEl.value);
             url.searchParams.set("validators",                  validatorsEl.value);
             url.searchParams.set("miners",    minersEl.value);
+            url.searchParams.set("_ck",    cache_key);
 
             try {
               const res  = await fetch(url);
@@ -598,6 +600,7 @@ body {
               url.searchParams.set("decay_rate",                  yParams.decay_rate);
               url.searchParams.set("capacity_alpha",              yParams.capacity_alpha);
               url.searchParams.set("alpha_sigmoid_steepness",     yParams.alpha_sigmoid_steepness);
+              url.searchParams.set("_ck",    cache_key);
 
               return fetch(url)
                 .then(r => { if (!r.ok) throw new Error(r.statusText); return r.text(); })

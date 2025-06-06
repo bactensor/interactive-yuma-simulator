@@ -35,6 +35,9 @@ RUN ENV=prod ENV_FILL_MISSING_VALUES=1 SECRET_KEY=dummy uv run python3 manage.py
 FROM $BASE_IMAGE AS secondary-image
 LABEL builder=false
 
+ARG DEPLOY_SHA
+ENV DEPLOY_SHA=$DEPLOY_SHA
+
 RUN apt-get update \
   && apt-get install -y wget \
   && rm -rf /var/lib/apt/lists/*

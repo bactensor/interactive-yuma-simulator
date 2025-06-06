@@ -7,7 +7,7 @@ if [ ! -f ".env" ]; then
     exit 1;
 fi
 
-docker compose build
+docker compose build --build-arg DEPLOY_SHA=$DEPLOY_SHA
 
 # Tag the first image from multi-stage app Dockerfile to mark it as not dangling
 #BASE_IMAGE=$(docker images --quiet --filter="label=builder=true" | head -n1)
