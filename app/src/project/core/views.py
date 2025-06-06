@@ -3,6 +3,7 @@ import logging
 import re
 from dataclasses import asdict
 from datetime import datetime, timedelta
+from functools import lru_cache
 from django.http import HttpResponseBadRequest
 from django.conf import settings
 
@@ -23,7 +24,6 @@ from .utils import ONE_MILLION, UINT16_MAX, fetch_metagraph_data, normalize
 logger = logging.getLogger(__name__)
 
 
-@cache_control(public=True, max_age=604800, s_maxage=604800)
 def simulation_view(request):
     selection_form = SelectionForm(request.GET or None)
     hyper_form = SimulationHyperparametersForm(request.GET or None)
@@ -49,7 +49,7 @@ def simulation_view(request):
             netuid = cleaned["netuid"]
             raw_validators = cleaned.get("validators", "")
 
-            picked_validators = check_validators(
+            picked_validators = validate_validators(
                 selection_form,
                 start_date=start,
                 netuid=netuid,
@@ -99,7 +99,8 @@ def simulation_view(request):
                     "yuma_params": yuma_params,
                 }
             )
-            
+            context["cache_key"] = settings.CACHE_KEY
+
     return render(request, "simulator.html", context)
 
 
@@ -162,6 +163,7 @@ def simulate_single_case_view(request):
         return HttpResponse(f"Error generating chart: {str(e)}", status=500)
 
     return HttpResponse(partial_html.data if partial_html else "No data", status=200)
+
 
 @cache_control(public=True, max_age=604800, s_maxage=604800)
 def metagraph_simulation_view(request):
@@ -267,20 +269,41 @@ def metagraph_simulation_view(request):
     return HttpResponse(partial_html.data or "No data", status=200)
 
 
-def check_validators(
+def validate_validators(
     form,
     start_date: datetime,
     netuid: int,
     raw_validators: str,
     stake_threshold: int = 1000,
 ) -> list[int] | None:
+    picked, errors = check_validators(
+        start_date=start_date,
+        netuid=netuid,
+        raw_validators=raw_validators,
+        stake_threshold=stake_threshold,
+    )
+
+    for field, message in errors:
+        form.add_error(field, message)
+
+    return picked
+
+
+@lru_cache(maxsize=128)
+def check_validators(
+    start_date: datetime,
+    netuid: int,
+    raw_validators: str,
+    stake_threshold: int = 1000,
+) -> tuple[list[int] | None, list[tuple[str, str]]]:
     """
     Fetch metagraph data for `start_block`/`netuid`,
     validate the comma-separated IDs in `raw_validators`
-    against the first‐epoch stakes, and add errors to `form`
-    as needed. Returns a list of ints (possibly empty)
+    against the first‐epoch stakes, and returns errors than can be
+    populated to form. Returns a list of ints (possibly empty)
     or None if the fetch itself failed in a fatal way.
     """
+    errors: list[tuple[str, str]] = []
     try:
         mg_data = fetch_metagraph_data(
             start_date=start_date,
@@ -298,10 +321,10 @@ def check_validators(
             msg = f"No metagraph data for date {start_date}"
         else:
             msg = f"Error fetching metagraph data ({resp.status_code}): {detail}"
-        form.add_error("start_date", msg)
+        errors.append(("start_date", msg))
         return None
     except Exception as e:
-        form.add_error("start_date", f"Error fetching metagraph data: {e}")
+        errors.append(("start_date", f"Error fetching metagraph data: {e}"))
         return None
 
 
@@ -309,7 +332,7 @@ def check_validators(
     uids = mg_data.get("uids", [])
     stakes = mg_data.get("stakes", {})
     if not stakes:
-        form.add_error("start_date", "Metagraph returned no stakes data")
+        errors.append(("start_date", "Metagraph returned no stakes data"))
         return None
 
     first_block = next(iter(stakes))
@@ -326,14 +349,14 @@ def check_validators(
         try:
             vid = int(tok)
         except ValueError:
-            form.add_error("validators", f"‘{tok}’ is not a valid integer")
+            errors.append(("validators", f"‘{tok}’ is not a valid integer"))
             continue
 
         picked_validators.append(vid)
         if vid not in valid_uids:
-            form.add_error("validators", f"Validator ID {vid} has <1000 stake in block {first_block}")
+            errors.append(("validators", f"Validator ID {vid} has <1000 stake in block {first_block}"))
 
-    return picked_validators
+    return picked_validators, errors
 
 
 def bootstrap_generate_ipynb_table(

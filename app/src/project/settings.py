@@ -5,6 +5,8 @@ from functools import wraps
 
 import environ
 import structlog
+import hashlib
+import time
 
 root = environ.Path(__file__) - 2
 
@@ -308,3 +310,13 @@ MGRAPH_USERNAME = os.environ.get("MGRAPH_USERNAME", "")
 MGRAPH_PASSWORD = os.environ.get("MGRAPH_PASSWORD", "")
 
 EPOCHS_PADDING = os.environ.get("EPOCHS_PADDING", "10")
+
+if 'prod' in ENV:
+    DEPLOY_SHA = env("DEPLOY_SHA", default="")
+    if not DEPLOY_SHA:
+        DEPLOY_SHA = env("HOSTNAME", default="")
+else:
+    # refresh cache on every dev restart/reload
+    DEPLOY_SHA = str(time.time())
+
+CACHE_KEY = hashlib.sha256(DEPLOY_SHA.encode()).hexdigest()[:8]
