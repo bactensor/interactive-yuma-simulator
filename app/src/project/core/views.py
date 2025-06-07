@@ -270,7 +270,7 @@ def metagraph_simulation_view(request):
             return HttpResponse(f"No metagraph data for timespan {start_date}–{end_date}", status=404)
         return HttpResponse(f"Error fetching metagraph data: {e}", status=400)
     except Exception as e:
-        return HttpResponse(f"Error fetching metagraph data: {e}", status=400)
+        return HttpResponse(f"Error fetching metagraph dataa: {e}", status=400)
 
     try:
         case = MetagraphCase.from_mg_dumper_data(
