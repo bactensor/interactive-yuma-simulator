@@ -1040,6 +1040,97 @@ class Case18(BaseCase):
         return weights_epochs_case_18
 
 
+def _get_shared_3server_weights_epochs_low_noise(num_epochs: int, seed: int = 42) -> list[torch.Tensor]:
+    """Generate shared proportional weights for 3 servers"""
+    weights_epochs = []
+
+    for epoch in range(num_epochs):
+        W = torch.zeros(3, 3)
+
+        # Server performance: Server 3 > Server 2 > Server 1 (small differences)
+        true_perf = torch.tensor([0.345, 0.35, 0.36])
+
+        gen_0 = torch.Generator().manual_seed(seed + 0 * num_epochs + epoch)
+        gen_1 = torch.Generator().manual_seed(seed + 1 * num_epochs + epoch)
+        gen_2 = torch.Generator().manual_seed(seed + 2 * num_epochs + epoch)
+
+        W[0, :] = true_perf + torch.normal(0.0, 0.010, (3,), generator=gen_0)
+        W[1, :] = true_perf + torch.normal(0.0, 0.015, (3,), generator=gen_1)
+        W[2, :] = true_perf + torch.normal(0.0, 0.015, (3,), generator=gen_2)
+
+        # Clamp to [0, 1] and normalize to proportional weights
+        W = torch.clamp(W, 0, 1)
+        W = (W.T / (W.sum(dim=1) + 1e-6)).T
+
+        weights_epochs.append(W)
+
+    return weights_epochs
+
+
+@register_case("Case 19")
+@dataclass
+class Case19(BaseCase):
+    name: str = "Case 19 - 3 servers Client-side WTA low noise"
+    validators: list[str] = field(
+        default_factory=lambda: [
+            "Big vali. 1 (low noise)",
+            "Big vali. 2 (low noise)",
+            "Big vali. 3 (low noise)",
+        ]
+    )
+    base_validator: str = "Big vali. 1 (low noise)"
+    servers: list[str] = field(default_factory=lambda: ["Server 1", "Server 2", "Server 3"])
+    chart_types: list[str] = field(default_factory=lambda: ["weights_subplots", "dividends", "bonds", "normalized_bonds", "incentives"])
+
+    def get_config_overrides(self) -> dict:
+        return {"winner_takes_all": True}
+
+    @property
+    def _get_base_weights_epochs(self) -> list[torch.Tensor]:
+        shared_weights =  _get_shared_3server_weights_epochs_low_noise(self.num_epochs)
+        # Apply client-side winner-takes-all
+        wta_weights = []
+        for W in shared_weights:
+            W_wta = torch.zeros_like(W)
+            for i in range(W.shape[0]):  # For each validator
+                max_idx = torch.argmax(W[i])
+                W_wta[i, max_idx] = 1.0
+            wta_weights.append(W_wta)
+
+        return wta_weights
+
+    @property
+    def _get_base_stakes_epochs(self) -> list[torch.Tensor]:
+        return [torch.tensor([0.34, 0.33, 0.33])] * self.num_epochs
+
+
+@register_case("Case 20")
+@dataclass
+class Case20(BaseCase):
+    name: str = "Case 20 - 3 servers Server-side WTA  low noise"
+    validators: list[str] = field(
+        default_factory=lambda: [
+            "Big vali. 1 (low noise)",
+            "Big vali. 2 (low noise)",
+            "Big vali. 3 (low noise)",
+        ]
+    )
+    base_validator: str = "Big vali. 1 (low noise)"
+    servers: list[str] = field(default_factory=lambda: ["Server 1", "Server 2", "Server 3"])
+    chart_types: list[str] = field(default_factory=lambda: ["weights_subplots", "dividends", "bonds", "normalized_bonds", "incentives"])
+
+    def get_config_overrides(self) -> dict:
+        return {"winner_takes_all": True}
+
+    @property
+    def _get_base_weights_epochs(self) -> list[torch.Tensor]:
+        return _get_shared_3server_weights_epochs_low_noise(self.num_epochs)
+
+    @property
+    def _get_base_stakes_epochs(self) -> list[torch.Tensor]:
+        return [torch.tensor([0.34, 0.33, 0.33])] * self.num_epochs
+
+
 # Shared weights generator function
 def _get_shared_weights_epochs(num_epochs: int, seed: int = 42) -> list[torch.Tensor]:
     """Generate shared weights for both WTA cases"""
@@ -1079,10 +1170,10 @@ def _get_shared_weights_epochs(num_epochs: int, seed: int = 42) -> list[torch.Te
     return weights_epochs
 
 
-@register_case("Case 19")
+@register_case("Case 21")
 @dataclass
-class Case19(BaseCase):
-    name: str = "Case 19 - Client-side WTA"
+class Case21(BaseCase):
+    name: str = "Case 21 - 2 servers Client-side WTA high noise"
     validators: list[str] = field(
         default_factory=lambda: [
             "Big vali. 1 (low noise)",
@@ -1113,10 +1204,10 @@ class Case19(BaseCase):
         return [torch.tensor([0.49, 0.49, 0.02])] * self.num_epochs
 
 
-@register_case("Case 20")
+@register_case("Case 22")
 @dataclass
-class Case20(BaseCase):
-    name: str = "Case 20 - Server-side WTA"
+class Case22(BaseCase):
+    name: str = "Case 22 - 2 servers Server-side WTA high noise"
     validators: list[str] = field(
         default_factory=lambda: [
             "Big vali. 1 (low noise)",
@@ -1169,10 +1260,10 @@ def _get_shared_3server_weights_epochs(num_epochs: int, seed: int = 42) -> list[
     return weights_epochs
 
 
-@register_case("Case 21")
+@register_case("Case 23")
 @dataclass
-class Case21(BaseCase):
-    name: str = "Case 21 - 3 servers Client-side WTA"
+class Case23(BaseCase):
+    name: str = "Case 23 - 3 servers Client-side WTA high noise"
     validators: list[str] = field(
         default_factory=lambda: [
             "Big vali. 1 (low noise)",
@@ -1206,10 +1297,10 @@ class Case21(BaseCase):
         return [torch.tensor([0.34, 0.33, 0.33])] * self.num_epochs
 
 
-@register_case("Case 22")
+@register_case("Case 24")
 @dataclass
-class Case22(BaseCase):
-    name: str = "Case 22 - 3 servers Server-side WTA"
+class Case24(BaseCase):
+    name: str = "Case 24 - 3 servers Server-side WTA high noise"
     validators: list[str] = field(
         default_factory=lambda: [
             "Big vali. 1 (low noise)",
