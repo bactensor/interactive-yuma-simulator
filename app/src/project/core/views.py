@@ -49,14 +49,17 @@ def simulation_view(request):
             netuid = cleaned["netuid"]
             raw_validators = cleaned.get("validators", "")
 
-            picked_validators = validate_validators(
-                selection_form,
-                start_date=start,
-                netuid=netuid,
-                raw_validators=raw_validators,
-            )
-            if picked_validators is not None:
-                cleaned["validators"] = picked_validators
+            if raw_validators:
+                picked = validate_validators(
+                    selection_form,
+                    start_date=start,
+                    netuid=netuid,
+                    raw_validators=raw_validators,
+                )
+                if picked is not None:
+                    cleaned["validators"] = picked
+            else:
+                cleaned["validators"] = None
 
         if selection_form.is_valid():
             context["valid_forms"] = True
@@ -192,11 +195,23 @@ def metagraph_simulation_view(request):
         
         netuid = int(request.GET.get("netuid", 0))
 
-        raw_validators = request.GET.get("validators", "")
-        validators = [int(v.strip()) for v in raw_validators.split(",") if v.strip()]
+        raw_validators = request.GET.get("validators", "").strip()
+        if raw_validators:
+            try:
+                requested_validators = [int(v) for v in raw_validators.split(",")]
+            except ValueError:
+                return HttpResponseBadRequest("Validator IDs must be integers.")
+        else:
+            requested_validators = None
 
-        raw_miners = request.GET.get("miners","")
-        miners_ids = [int(m.strip()) for m in raw_miners.split(",") if m.strip()]
+        raw_miners = request.GET.get("miners", "").strip()
+        if raw_miners:
+            try:
+                requested_miners = [int(m) for m in raw_miners.split(",")]
+            except ValueError:
+                return HttpResponseBadRequest("Miner IDs must be integers.")
+        else:
+            requested_miners = None
 
         raw_alpha_tao = float(request.GET.get("alpha_tao_ratio", 0.1))
         
@@ -243,9 +258,8 @@ def metagraph_simulation_view(request):
     try:
         case = MetagraphCase.from_mg_dumper_data(
             mg_data=mg_data,
-            top_validators_ids=validators,
-            netuid=netuid,
-            selected_miners=miners_ids,
+            requested_validators=requested_validators,
+            requested_miners=requested_miners,
             )
     except ValueError as e:
         return HttpResponse(str(e), status=400)
@@ -303,6 +317,7 @@ def check_validators(
     populated to form. Returns a list of ints (possibly empty)
     or None if the fetch itself failed in a fatal way.
     """
+    #TODO(Konrad): refactor the function to work with hotkeys not uids 
     errors: list[tuple[str, str]] = []
     try:
         mg_data = fetch_metagraph_data(

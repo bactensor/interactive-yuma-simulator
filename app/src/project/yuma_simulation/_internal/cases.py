@@ -2,7 +2,7 @@ import torch
 import pandas as pd
 from dataclasses import dataclass, field
 from itertools import chain
-from typing import Any
+from typing import Any, Optional
 import logging
 from .metagraph_utils import (
     epoch_hotkeys_by_uid,
@@ -102,7 +102,6 @@ class MetagraphCase(BaseCase):
     """
 
     introduce_shift: bool = False
-    shift_validator_id: int = 0
     shift_validator_hotkey: str = ""
     base_validator: str = ""
     num_epochs: int = 40
@@ -111,8 +110,7 @@ class MetagraphCase(BaseCase):
     metas: list[dict] = field(default_factory=list)  # List of metagraph dicts: { "S": ..., "W": ..., "hotkeys": ... }
 
     validators: list[str] = field(default_factory=list)
-    top_validators_ids: list[int] = field(default_factory=list)
-    top_validators_hotkeys: list[str] = field(default_factory=list)
+    requested_validators: list[str] = field(default_factory=list)
 
     # Limits for filtering (columns in W or entries in S)
     server_limit: int = 256
@@ -172,36 +170,10 @@ class MetagraphCase(BaseCase):
             self.validators_epochs.append(validators_for_epoch)
             self.servers.append(miners_for_epoch)
 
-        # For base_validator and top_validators, we use the first epoch as reference.
-        first_valid_indices = self.valid_indices_epochs[0]
-        first_validators = self.validators_epochs[0]
-        try:
-            if self.introduce_shift:
-                row_in_valid_indices = first_valid_indices.index(self.shift_validator_id)
-                self.base_validator = first_validators[row_in_valid_indices]
-            else:
-                self.base_validator = first_validators[0]
-        except ValueError:
-            raise ValueError(
-                "The shifted validator id is not present in the list of valid validator ids in epoch 0."
-            )
-
-        # Process top validators based on the first epoch.
-        self.top_validators_hotkeys = []
-        for tv_id in self.top_validators_ids:
-            try:
-                row_in_valid_indices = first_valid_indices.index(tv_id)
-                hotkey = first_validators[row_in_valid_indices]
-                self.top_validators_hotkeys.append(hotkey)
-                if tv_id == self.shift_validator_id:
-                    self.shift_validator_hotkey = hotkey
-            except ValueError:
-                raise ValueError(
-                    f"Validator id {tv_id} is not present in the valid validator IDs in the first requested."
-                )
-
-        if not self.validators:
-            self.validators = first_validators
+        #TODO (somehow refactor to not rely on base case post init logic just to satisfy it)
+        if not self.base_validator:
+            self.base_validator = self.requested_validators[0]
+        self.validators = self.requested_validators
 
         super().__post_init__()
 
@@ -209,9 +181,8 @@ class MetagraphCase(BaseCase):
     def from_mg_dumper_data(
         cls,
         mg_data: dict[str, Any],
-        top_validators_ids: list[int],
-        selected_miners: list[int],
-        netuid: int,
+        requested_validators: Optional[list[str]] = None,
+        requested_miners: Optional[list[str]] = None,
     ) -> "MetagraphCase":
         uids = mg_data["uids"]
         hotkeys = mg_data["hotkeys"]
@@ -222,6 +193,28 @@ class MetagraphCase(BaseCase):
             blk: filter_duplicate_validators(blk_weights, uids, stakes[blk], hotkeys)
             for blk, blk_weights in weights.items()
         }
+
+        if requested_validators is None:
+            validator_max_stake: dict[str, float] = {}
+
+            for blk_str, block_weights in weights.items():
+                for src_idx_str in block_weights.keys():
+                    src_idx = int(src_idx_str)
+                    hk_src = hotkeys[src_idx]
+
+                    stake_amt = stakes.get(blk_str, {}).get(src_idx_str, 0.0)
+
+                    prev_max = validator_max_stake.get(hk_src, 0.0)
+                    if stake_amt > prev_max:
+                        validator_max_stake[hk_src] = stake_amt
+
+            sorted_validators = sorted(
+                validator_max_stake.items(),
+                key=lambda kv: kv[1],
+                reverse=True
+            )
+            requested_validators = [hk for (hk, _) in sorted_validators[:5]]
+
 
         epoch_hks = epoch_hotkeys_by_uid(
             hotkeys = hotkeys,
@@ -252,7 +245,7 @@ class MetagraphCase(BaseCase):
         case = cls(
             metas=metas,
             num_epochs=len(metas),
-            top_validators_ids=top_validators_ids,
+            requested_validators=requested_validators,
         )
 
         case.hotkey_label_map = {
@@ -262,7 +255,11 @@ class MetagraphCase(BaseCase):
         }
 
         first_epoch_hks = epoch_hks[mg_data["blocks"][0]]
-        case.selected_servers = [first_epoch_hks[i] for i in selected_miners]
+
+        #TODO(do some validation for the requested_miners)
+        if requested_miners is not None:
+            case.selected_servers = [hk for hk in first_epoch_hks if hk in requested_miners]
+
         return case
 
     @property

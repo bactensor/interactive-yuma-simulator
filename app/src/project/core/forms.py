@@ -70,23 +70,36 @@ class SelectionForm(forms.Form):
         label="Subnet ID",
         widget=forms.NumberInput(attrs={"class": "form-control", "id": "id_netuid"}),
     )
-    validators = forms.CharField(
-        required=False,
-        label="Validators IDs (comma-sep)",
-        widget=forms.TextInput(attrs={"class": "form-control", "id": "id_validators"}),
-    )
-
-    miners = forms.CharField(
-        required=False,
-        label="Miners IDs (comma-sep)",
-        help_text="Up to 10 miner IDs (comma-separated)",
-        widget=forms.TextInput(attrs={"class": "form-control", "id": "id_miners"}),
-    )
 
     selected_yumas = forms.ChoiceField(
         choices=[(k, v) for k, v in yumas_dict.items()],
         initial="YUMA2",
         label="Select Yuma Version",
+    )
+
+    validators_hotkeys = forms.CharField(
+        required=False,
+        label="Validators Hotkeys",
+        widget=forms.Textarea(
+            attrs={
+                "class": "form-control",
+                "rows": 3,
+                "placeholder": "Paste one validator hotkey per line…",
+                "id": "id_validators_hotkeys",
+            }
+        )
+    )
+    miners_hotkeys = forms.CharField(
+        required=False,
+        label="Miners Hotkeys",
+        widget=forms.Textarea(
+            attrs={
+                "class": "form-control",
+                "rows": 3,
+                "placeholder": "Paste one miner hotkey per line…",
+                "id": "id_miners_hotkeys",
+            }
+        )
     )
 
     def __init__(self, *args, **kwargs):
@@ -131,8 +144,6 @@ class SelectionForm(forms.Form):
                         Field("start_date"),
                         Field("end_date"),
                         Field("netuid"),
-                        Field("validators"),
-                        Field("miners"),
                         css_class="ml-4",
                         id="metagraph_params",
                     ),
@@ -171,27 +182,6 @@ class SelectionForm(forms.Form):
             if end_utc < start_utc:
                 self.add_error('end_date',   "End cannot be before start.")
         return cleaned
-
-    def clean_miners(self):
-        raw = self.cleaned_data.get("miners", "")
-        if not raw:
-            return []
-        parts = [tok.strip() for tok in raw.split(",") if tok.strip()]
-        if len(parts) > 10:
-            raise forms.ValidationError("You can specify at most 10 miner IDs.")
-
-        out: list[int] = []
-        for tok in parts:
-            try:
-                m = int(tok)
-            except ValueError:
-                raise forms.ValidationError(f"‘{tok}’ is not a valid integer.")
-            if not (0 <= m <= 255):
-                raise forms.ValidationError(f"Miner ID {m} must be between 0 and 255.")
-            out.append(m)
-
-        return out
-
 
 class SimulationHyperparametersForm(forms.Form):
     kappa = forms.FloatField(

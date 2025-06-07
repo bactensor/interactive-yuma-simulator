@@ -126,7 +126,7 @@ def _run_dynamic_simulation(
     dividends_per_epoch: list[dict[str, float]] = []
     relative_dividends_per_epoch: list[dict[str, float]] = []
     bonds_per_epoch: list[torch.Tensor] = []
-    server_incentives_per_epoch: list[torch.Tensor] = []
+    hotkeys_incentive_over_epochs: dict[str, list[float]] = {}
 
     # These states are passed between epochs.
     B_state: torch.Tensor | None = None
@@ -137,6 +137,7 @@ def _run_dynamic_simulation(
     # cache those here - this is property - it might be cached property but "double caching" doesn't hurt
     weights_epochs = case.weights_epochs
     stakes_epochs = case.stakes_epochs
+    hotkeys_epochs = [meta["hotkeys"] for meta in case.metas]
 
     yuma_config = yuma_config.with_overrides(case.get_config_overrides())
 
@@ -227,7 +228,6 @@ def _run_dynamic_simulation(
             )
 
         bonds_per_epoch.append(b)
-        server_incentives_per_epoch.append(i)
 
         dividends_this_epoch = _compute_dividends_for_epoch(
             D_normalized=D_normalized,
@@ -244,11 +244,33 @@ def _run_dynamic_simulation(
         dividends_per_epoch.append(dividends_this_epoch)
         relative_dividends_per_epoch.append(relative_dividends_this_epoch)
 
+        raw_inc = simulation_results["server_incentive"]
+        if isinstance(raw_inc, torch.Tensor):
+            raw_list = raw_inc.clone().view(-1).tolist()
+        else:
+            raw_list = [float(raw_inc)]
+
+        full_hotkeys = hotkeys_epochs[epoch]
+
+        curr_hotkeys = [full_hotkeys[idx] for idx in current_miner_indices]
+        curr_incentives = [raw_list[idx]        for idx in current_miner_indices]
+
+        curr_map = dict(zip(curr_hotkeys, curr_incentives))
+
+        for hk in curr_map:
+            if hk not in hotkeys_incentive_over_epochs:
+                hotkeys_incentive_over_epochs[hk] = [0.0] * epoch
+
+        for hk, series in hotkeys_incentive_over_epochs.items():
+            series.append(curr_map.get(hk, 0.0))
+
+
+
     # Merge the per-epoch dictionaries
     merged_dividends = pd.DataFrame(dividends_per_epoch).to_dict(orient="list")
     merged_relative_dividends = pd.DataFrame(relative_dividends_per_epoch).to_dict(orient="list")
 
-    return (merged_dividends, merged_relative_dividends, bonds_per_epoch, server_incentives_per_epoch)
+    return (merged_dividends, merged_relative_dividends, bonds_per_epoch, hotkeys_incentive_over_epochs)
 
 def _call_yuma(
     epoch: int,

@@ -345,7 +345,28 @@ body {
                   </h2>
                   <div id="collapseSim" class="accordion-collapse collapse show" aria-labelledby="headingSim">
                     <div class="accordion-body">
+
+                      {# Renders “Select Cases”, “Metagraph Case” checkbox, start/end/netuid, and “Select Yuma Version” #}
                       {% crispy selection_form %}
+
+                      {# ─────────── Show a checkbox instead of a button ─────────── #}
+                      <div class="form-check form-check-inline ml-4" style="margin-top: 0.75rem;">
+                        <input
+                          class="form-check-input"
+                          type="checkbox"
+                          id="id_show_advanced"
+                        >
+                        <!-- <label class="form-check-label" for="id_show_advanced">
+                          Advanced Settings
+                        </label> -->
+                      </div>
+
+                      {# ─────────── The two hotkey textareas, hidden by default ─────────── #}
+                      <div id="advanced_settings" class="ml-4 d-none" style="margin-top: 0.5rem;">
+                        {{ selection_form.validators_hotkeys|as_crispy_field }}
+                        {{ selection_form.miners_hotkeys|as_crispy_field }}
+                      </div>
+
                     </div>
                   </div>
                 </div>
@@ -500,8 +521,6 @@ body {
         const startDateEl = document.getElementById('id_start_date');
         const endDateEl   = document.getElementById('id_end_date');
         const netuidEl       = document.getElementById('id_netuid');
-        const validatorsEl   = document.getElementById('id_validators');
-        const minersEl = document.getElementById('id_miners');
       
         const validForms    = ("{{ valid_forms|yesno:'true,false' }}" === "true");
         const selectedCases = JSON.parse('{{ cases_json|escapejs }}');
@@ -555,8 +574,6 @@ body {
             url.searchParams.set("start_date",                 startDateEl.value);
             url.searchParams.set("end_date",                  endDateEl.value);
             url.searchParams.set("netuid",                      netuidEl.value);
-            url.searchParams.set("validators",                  validatorsEl.value);
-            url.searchParams.set("miners",    minersEl.value);
             url.searchParams.set("_ck",    cache_key);
 
             try {
@@ -721,26 +738,63 @@ body {
     });
   });
 </script>
-<script>
-  function updateMetagraphToggle() {
-    const on = document.getElementById("id_use_metagraph").checked;
-    document.getElementById("block_standard")
-            .classList.toggle("d-none", on);
-    document.getElementById("metagraph_params")
-            .classList.toggle("d-none", !on);
-    document
-            .getElementById("row_reset_bonds")
-            .classList.toggle("d-none", on);
-    document.getElementById("row_alpha_tao_ratio")
-            .classList.toggle("d-none", !on);
-  }
 
-  document.addEventListener("DOMContentLoaded", () => {
-    const cb = document.getElementById("id_use_metagraph");
-    cb.addEventListener("change", updateMetagraphToggle);
+
+<script>
+  document.addEventListener("DOMContentLoaded", function() {
+    const useMetagraphEl = document.getElementById("id_use_metagraph");
+    const blockStandard  = document.getElementById("block_standard");
+    const metaParams     = document.getElementById("metagraph_params");
+    const hotkeyCheckbox = document.getElementById("id_show_advanced");
+    const hotkeySection  = document.getElementById("advanced_settings");
+
+    function updateMetagraphToggle() {
+      const isOn = useMetagraphEl.checked;
+
+      // 1) Hide “Select Cases” when Metagraph is checked
+      blockStandard.classList.toggle("d-none", isOn);
+
+      // 2) Show/hide the 3 metagraph inputs (start_date, end_date, netuid)
+      metaParams.classList.toggle("d-none", !isOn);
+
+      // 3) The existing “Reset Bonds” / “Alpha Tao Ratio” row toggles:
+      document.getElementById("row_reset_bonds")
+              .classList.toggle("d-none", isOn);
+      document.getElementById("row_alpha_tao_ratio")
+              .classList.toggle("d-none", !isOn);
+
+      // 4) Show/hide the hotkey-checkbox AND force-hide the hotkey fields if off
+      if (isOn) {
+        // show the checkbox (its parent <div> might have d-none)
+        hotkeyCheckbox.parentElement.classList.remove("d-none");
+      } else {
+        // hide the entire checkbox <div>
+        hotkeyCheckbox.parentElement.classList.add("d-none");
+        // un‐check the box
+        hotkeyCheckbox.checked = false;
+        // hide the hotkey textarea section
+        hotkeySection.classList.add("d-none");
+      }
+    }
+
+    // Run on page load:
     updateMetagraphToggle();
+
+    // Re‐run when “Metagraph Case” toggles:
+    useMetagraphEl.addEventListener("change", updateMetagraphToggle);
+
+    // Whenever the user checks/unchecks “Show Advanced Settings”, show/hide hotkey fields:
+    hotkeyCheckbox.addEventListener("change", function() {
+      if (hotkeyCheckbox.checked) {
+        hotkeySection.classList.remove("d-none");
+      } else {
+        hotkeySection.classList.add("d-none");
+      }
+    });
   });
 </script>
+
+
 
 <script>
   const startInput = document.getElementById('id_start_date');

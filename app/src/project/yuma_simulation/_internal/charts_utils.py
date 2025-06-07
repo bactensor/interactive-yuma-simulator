@@ -117,7 +117,7 @@ def _plot_dividends(
     plt.close("all")
     fig, ax_main = plt.subplots(figsize=(14, 6))
 
-    top_vals = getattr(case, "top_validators_hotkeys", [])
+    top_vals = getattr(case, "requested_validators", [])
     if top_vals:
         plot_validator_names = top_vals.copy()
     else:
@@ -257,7 +257,7 @@ def _plot_relative_dividends(
 
     ax = fig.add_subplot(gs[1])
     all_validators = list(validators_relative_dividends.keys())
-    top_vals = getattr(case, "top_validators_hotkeys", []) or all_validators.copy()
+    top_vals = getattr(case, "requested_validators", []) or all_validators.copy()
     if case.base_validator not in top_vals:
         top_vals.append(case.base_validator)
     x = np.arange(plot_epochs)
@@ -331,7 +331,7 @@ def _plot_relative_dividends_comparisson(
     all_validators = list(validators_relative_dividends_normal.keys())
 
     # Use the case's top validators if available; otherwise, plot all.
-    top_vals = getattr(case, "top_validators_hotkeys", [])
+    top_vals = getattr(case, "requested_validators", [])
     if top_vals:
         plot_validator_names = top_vals.copy()
     else:
@@ -521,6 +521,7 @@ def _plot_bonds(
 def _plot_bonds_metagraph_dynamic(
     case: MetagraphCase,
     bonds_per_epoch:    list[torch.Tensor],
+    default_miners:    list[str],
     case_name:          str,
     to_base64:          bool = False,
     normalize:          bool = False,
@@ -536,7 +537,7 @@ def _plot_bonds_metagraph_dynamic(
 
     validators_epochs = case.validators_epochs
     miners_epochs     = case.servers
-    selected_validators = case.top_validators_hotkeys
+    selected_validators = case.requested_validators
 
     bonds_data = _prepare_bond_data_dynamic(
         bonds_per_epoch, validators_epochs, miners_epochs,
@@ -545,17 +546,46 @@ def _plot_bonds_metagraph_dynamic(
 
     subset_v = selected_validators or validators_epochs[0]
 
-    subset_m = (case.selected_servers or miners_epochs[0])[:10]
+    subset_m = case.selected_servers or default_miners
 
-    miner_keys      = miners_epochs[0]
+    # miner_keys      = miners_epochs[0]
     validator_keys: list[str] = []
     for epoch in validators_epochs:
         for v in epoch:
             if v not in validator_keys:
                 validator_keys.append(v)
 
-    m_idx = [miner_keys.index(m)     for m in subset_m]
-    v_idx = [validator_keys.index(v) for v in subset_v]
+    #TODO(handle this better)
+    m_idx = []
+    for m in subset_m:
+        mi = None
+        for me in miners_epochs:
+            try:
+                mi = me.index(m)
+            except ValueError:
+                pass
+            else:
+                break
+        if mi is None:
+            raise RuntimeError('AAAAA')
+        else:
+            m_idx.append(mi)
+    # m_idx = [miner_keys.index(m)     for m in subset_m]
+    v_idx = []
+    for v in subset_v:
+        vi = None
+        for ve in validators_epochs:
+            try:
+                vi = ve.index(v)
+            except ValueError:
+                pass
+            else:
+                break
+        if vi is None:
+            raise RuntimeError('AAAAA')
+        else:
+            v_idx.append(vi)
+    # v_idx = [validator_keys.index(v) for v in subset_v]
 
     plot_data: list[list[list[float]]] = []
     for mi in m_idx:
@@ -586,7 +616,7 @@ def _plot_bonds_metagraph_dynamic(
         nrows=2,
         ncols=1,
         height_ratios=[TEXT_BLOCK_H, chart_block_h],
-        hspace=0.0,
+        hspace=0.1,
         figure=fig
     )
 
@@ -916,7 +946,7 @@ def _plot_validator_server_weights_subplots(
 
 def _plot_validator_server_weights_subplots_dynamic(
     case: MetagraphCase,
-    case_name: str,
+    default_miners: list[str],
     epochs_padding: int = 0,
     to_base64: bool = False,
 ) -> str | None:
@@ -929,8 +959,8 @@ def _plot_validator_server_weights_subplots_dynamic(
         print("Nothing to plot (padding >= total_epochs).")
         return None
 
-    subset_vals = case.top_validators_hotkeys or case.validators_epochs[0]
-    subset_srvs = case.selected_servers   or case.servers[0][:10]
+    subset_vals = case.requested_validators or case.validators_epochs[0]
+    subset_srvs = case.selected_servers   or default_miners
     hotkey_map  = case.hotkey_label_map
 
     data_cube: list[list[list[float]]] = []
@@ -967,7 +997,7 @@ def _plot_validator_server_weights_subplots_dynamic(
         nrows=2,
         ncols=1,
         height_ratios=[TEXT_BLOCK_H, chart_block_h],
-        hspace=0.0,
+        hspace=0.1,
         figure=fig
     )
 
@@ -1459,3 +1489,51 @@ def _generate_relative_dividends_summary_html(
     )
 
     return f"{title_html}{desc_html}{table_html}"
+
+
+def _pick_default_miners(
+    hotkeys_incentive_over_epochs: dict[str, list[float]]
+) -> list[str]:
+    """
+    Selects four default miners based on their incentive time-series:
+      1. Top 2 by total incentive received across all epochs.
+      2. Next 2 by incentive spread (max − min).
+         If the top‐2 spread hotkeys exactly match the top‐2 total hotkeys,
+         instead grab the 3rd and 4th by spread.
+    Returns a list of four hotkey IDs.
+    """
+    total_received = {
+        hk: sum(series)
+        for hk, series in hotkeys_incentive_over_epochs.items()
+    }
+    spread = {
+        hk: (max(series) - min(series)) if series else 0.0
+        for hk, series in hotkeys_incentive_over_epochs.items()
+    }
+
+    sorted_by_total = [
+        hk for hk, _ in sorted(
+            total_received.items(),
+            key=lambda kv: kv[1],
+            reverse=True
+        )
+    ]
+    sorted_by_spread = [
+        hk for hk, _ in sorted(
+            spread.items(),
+            key=lambda kv: kv[1],
+            reverse=True
+        )
+    ]
+
+    top_two_by_total = sorted_by_total[:2]
+    first_two_spread = sorted_by_spread[:2]
+    if set(first_two_spread) == set(top_two_by_total):
+        top_two_by_spread = sorted_by_spread[2:4]
+    else:
+        top_two_by_spread = [
+            hk for hk in sorted_by_spread
+            if hk not in top_two_by_total
+        ][:2]
+
+    return top_two_by_total + top_two_by_spread
