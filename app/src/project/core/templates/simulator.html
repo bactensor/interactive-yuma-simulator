@@ -350,15 +350,10 @@ body {
                       {% crispy selection_form %}
 
                       {# ─────────── Show a checkbox instead of a button ─────────── #}
-                      <div class="form-check form-check-inline ml-4" style="margin-top: 0.75rem;">
-                        <input
-                          class="form-check-input"
-                          type="checkbox"
-                          id="id_show_advanced"
-                        >
-                        <!-- <label class="form-check-label" for="id_show_advanced">
-                          Advanced Settings
-                        </label> -->
+                      <div class="form-check form-check-inline ml-4" 
+                          style="margin-top: 0.75rem; display: none !important;">
+                        <input class="form-check-input" type="checkbox" id="id_show_advanced">
+                        <label class="form-check-label" for="id_show_advanced">Advanced Settings</label>
                       </div>
 
                       {# ─────────── The two hotkey textareas, hidden by default ─────────── #}
