@@ -441,6 +441,13 @@ body {
                               bondInput.required = true;
                               bondInput.classList.remove('fake-disabled');
                             }
+
+                            const effectiveGroup = document.querySelectorAll('.liquid-alpha-effective-group');
+                            if (val === 'YUMA3') {
+                              effectiveGroup.forEach(el => el.style.display = 'flex');
+                            } else {
+                              effectiveGroup.forEach(el => el.style.display = 'none');
+                            }
                           }
                         
                           liquidCheckbox.addEventListener('change', updateLiquidVisibility);
@@ -566,6 +573,7 @@ body {
             url.searchParams.set("decay_rate",                  yParams.decay_rate);
             url.searchParams.set("capacity_alpha",              yParams.capacity_alpha);
             url.searchParams.set("alpha_sigmoid_steepness",     yParams.alpha_sigmoid_steepness);
+            url.searchParams.set("liquid_alpha_effective_weights",                 yParams.liquid_alpha_effective_weights);
             url.searchParams.set("start_date",                 startDateEl.value);
             url.searchParams.set("end_date",                  endDateEl.value);
             url.searchParams.set("netuid",                      netuidEl.value);
@@ -612,6 +620,7 @@ body {
               url.searchParams.set("decay_rate",                  yParams.decay_rate);
               url.searchParams.set("capacity_alpha",              yParams.capacity_alpha);
               url.searchParams.set("alpha_sigmoid_steepness",     yParams.alpha_sigmoid_steepness);
+              url.searchParams.set("liquid_alpha_effective_weights",                 yParams.liquid_alpha_effective_weights);
               url.searchParams.set("_ck",    cache_key);
 
               return fetch(url)

@@ -102,6 +102,15 @@ class SelectionForm(forms.Form):
         )
     )
 
+    liquid_alpha_effective_weights = forms.BooleanField(
+        required=False,
+        initial=False,
+        label="Use Effective Weights on Liquid Alpha calculations",
+        widget=forms.CheckboxInput(attrs={
+            "id": "id_liquid_alpha_effective_weights"
+        }),
+    )
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -151,6 +160,13 @@ class SelectionForm(forms.Form):
                     id="block_metagraph",
                 ),
                 Field("selected_yumas"),
+                Div(
+                Field(
+                    "liquid_alpha_effective_weights",
+                    wrapper_class="col-12 mb-3 liquid-alpha-effective-group"
+                ),
+                css_class="row liquid-alpha-effective-group"
+                ),
             ),
         )
 
