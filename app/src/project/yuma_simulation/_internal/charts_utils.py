@@ -963,13 +963,18 @@ def _plot_validator_server_weights_subplots_dynamic(
     subset_srvs = case.selected_servers   or default_miners
     hotkey_map  = case.hotkey_label_map
 
+    weights_epochs = case.weights_epochs
+    validators_epochs = case.validators_epochs
+    servers_epochs    = case.servers
+
     data_cube: list[list[list[float]]] = []
     for srv in subset_srvs:
         per_val = []
         for val in subset_vals:
             series = []
+
             for e in range(epochs_padding, total_epochs):
-                ve, se, W = case.validators_epochs[e], case.servers[e], case.weights_epochs[e]
+                ve, se, W = validators_epochs[e], servers_epochs[e], weights_epochs[e]
                 if (val in ve) and (srv in se):
                     r, c = ve.index(val), se.index(srv)
                     series.append(float(W[r, c].item()))
