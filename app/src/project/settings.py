@@ -256,6 +256,17 @@ LOGGING = {
             "handlers": ["console"],
             "level": "INFO",
         },
+
+        "matplotlib": {
+            "handlers": ["console"],      
+            "level": "WARNING",           
+            "propagate": False,
+        },
+        "matplotlib.font_manager": {
+            "handlers": ["console"],
+            "level": "WARNING",           
+            "propagate": False,
+        },
     },
 }
 

@@ -9,6 +9,7 @@ import logging
 import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
+matplotlib.set_loglevel("warning")
 
 import matplotlib.pyplot as plt
 import numpy as np

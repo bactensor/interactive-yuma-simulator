@@ -1,6 +1,5 @@
 import math
 import os
-
 import dataclasses
 from dataclasses import asdict, dataclass, field
 from typing import Optional, Dict, Union
@@ -37,7 +36,7 @@ class YumaParams:
     override_consensus_high: float | None = None
     override_consensus_low: float | None = None
     winner_takes_all: bool = False
-
+    liquid_alpha_effective_weights: bool = False
 
 @dataclass
 class YumaConfig:
@@ -608,6 +607,9 @@ def Yuma3(
     if B_old is None:
         B_old = torch.zeros_like(W)
 
+    # === Effective Weights ===
+    W_eff = config.bond_penalty * W_clipped + (1 - config.bond_penalty) * W
+
     # === Liquid Alpha Adjustment ===
     alpha = 1 - config.bond_moving_avg
     if config.liquid_alpha and (C_old is not None):
@@ -617,8 +619,12 @@ def Yuma3(
         liquid_alpha_C = liquid_alpha_mode_map[config.liquid_alpha_consensus_mode](C, C_old)
         # This logic is only for simulation purposes, not a Rust Yuma implemenation reference
 
+        LA_weights = W
+        if config.liquid_alpha_effective_weights:
+            LA_weights = W_eff
+
         alpha = _compute_liquid_alpha(
-            W=W,
+            W=LA_weights,
             B=B_old,
             C=liquid_alpha_C,
             alpha_sigmoid_steepness=config.alpha_sigmoid_steepness,
@@ -636,7 +642,7 @@ def Yuma3(
 
     # Each validator can increase bonds by at most alpha per epoch towards the cap
     purchase_increment = (
-        alpha * W
+        alpha * W_eff
     )  # Validators allocate their purchase across miners based on weights
     # Ensure that purchase does not exceed remaining capacity
     purchase = torch.min(purchase_increment, remaining_capacity)

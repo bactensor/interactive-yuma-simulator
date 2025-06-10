@@ -94,6 +94,10 @@ def simulation_view(request):
                 "alpha_sigmoid_steepness": yuma_data["alpha_sigmoid_steepness"],
             }
 
+            effective_weights = selection_form.cleaned_data.get("liquid_alpha_effective_weights", False)
+            if yuma_key.startswith("YUMA3"):
+                yuma_params["liquid_alpha_effective_weights"] = effective_weights
+
             context["yumas_json"] = json.dumps(
                 {
                     "selected_yuma_key": yuma_key,
@@ -123,6 +127,7 @@ def simulate_single_case_view(request):
         reset_bonds = request.GET.get("reset_bonds", "False") == "true"
         liquid_alpha_consensus_mode = request.GET.get("liquid_alpha_consensus_mode", "CURRENT")
         liquid_alpha = request.GET.get("liquid_alpha", "False") == "true"
+        effective_weights = request.GET.get("liquid_alpha_effective_weights", "False") == "true"
 
         chosen_yuma = request.GET.get("chosen_yuma", "YUMA")
 
@@ -142,15 +147,19 @@ def simulate_single_case_view(request):
         liquid_alpha_consensus_mode=liquid_alpha_consensus_mode,
     )
 
-    yuma_params = YumaParams(
-        bond_moving_avg=normalize(raw_bond_moving_avg, ONE_MILLION),
-        liquid_alpha=liquid_alpha,
-        alpha_high=alpha_high,
-        alpha_low=alpha_low,
-        decay_rate=decay_rate,
-        capacity_alpha=capacity_alpha,
-        alpha_sigmoid_steepness=alpha_sigmoid_steepness,
-    )
+    yuma_kwargs = {
+        "bond_moving_avg":             normalize(raw_bond_moving_avg, ONE_MILLION),
+        "liquid_alpha":                liquid_alpha,
+        "alpha_high":                  alpha_high,
+        "alpha_low":                   alpha_low,
+        "decay_rate":                  decay_rate,
+        "capacity_alpha":              capacity_alpha,
+        "alpha_sigmoid_steepness":     alpha_sigmoid_steepness,
+    }
+    if chosen_yuma.startswith("YUMA3"):
+        yuma_kwargs["liquid_alpha_effective_weights"] = effective_weights
+
+    yuma_params = YumaParams(**yuma_kwargs)
 
     package_cases = get_synthetic_cases(use_full_matrices=True, reset_bonds=reset_bonds)
     chosen_case = next((c for c in package_cases if c.name == case_name), None)
@@ -176,6 +185,8 @@ def metagraph_simulation_view(request):
         lam = request.GET.get("liquid_alpha_consensus_mode", "CURRENT")
         liq_alpha = request.GET.get("liquid_alpha", "False") == "true"
         chosen_yuma = request.GET.get("selected_yumas", "YUMA")
+        effective_weights = request.GET.get("liquid_alpha_effective_weights", "False") == "true"
+
 
         raw_bma = float(request.GET.get("bond_moving_avg", 900_000))
         alpha_high = float(request.GET.get("alpha_high", 0.3))
@@ -224,15 +235,21 @@ def metagraph_simulation_view(request):
         liquid_alpha_consensus_mode=lam,
         alpha_tao_ratio=raw_alpha_tao,
     )
-    yuma_params = YumaParams(
-        bond_moving_avg=normalize(raw_bma, ONE_MILLION),
-        liquid_alpha=liq_alpha,
-        alpha_high=alpha_high,
-        alpha_low=alpha_low,
-        decay_rate=decay_rate,
-        capacity_alpha=cap_alpha,
-        alpha_sigmoid_steepness=steepness,
-    )
+
+    mg_yuma_kwargs = {
+        "bond_moving_avg":             normalize(raw_bma, ONE_MILLION),
+        "liquid_alpha":                liq_alpha,
+        "alpha_high":                  alpha_high,
+        "alpha_low":                   alpha_low,
+        "decay_rate":                  decay_rate,
+        "capacity_alpha":              cap_alpha,
+        "alpha_sigmoid_steepness":     steepness,
+    }
+
+    if chosen_yuma.startswith("YUMA3"):
+        mg_yuma_kwargs["liquid_alpha_effective_weights"] = effective_weights
+    
+    yuma_params = YumaParams(**mg_yuma_kwargs)
 
     epochs_padding = int(settings.EPOCHS_PADDING)
     start_date = start_date - timedelta(seconds=360 * 12 * epochs_padding)
