@@ -2,6 +2,7 @@ import pandas as pd
 import logging
 from IPython.display import HTML
 
+from project.yuma_simulation._internal import charts_utils_plotly
 from project.yuma_simulation._internal.cases import BaseCase
 from project.yuma_simulation._internal.charts_utils import (
     _plot_relative_dividends,
@@ -145,7 +146,7 @@ def generate_metagraph_based_chart_table(
                 yuma_config  = config,
             )
         deafult_miners = _pick_default_miners(incentives)
-        chart_rel = _plot_relative_dividends(
+        chart_rel = charts_utils_plotly._plot_relative_dividends(
             validators_relative_dividends=rel_divs,
             case_name=final_name,
             case=normal_case,
@@ -153,13 +154,14 @@ def generate_metagraph_based_chart_table(
             epochs_padding=epochs_padding,
             to_base64=True,
         )
-        chart_weights = _plot_validator_server_weights_subplots_dynamic(
+        chart_weights = charts_utils_plotly._plot_validator_server_weights_subplots_dynamic(
             case=normal_case,
             default_miners=deafult_miners,
+            case_name=final_name,
             to_base64=True,
             epochs_padding=epochs_padding,
         )
-        chart_bonds = _plot_bonds_metagraph_dynamic(
+        chart_bonds = charts_utils_plotly._plot_bonds_metagraph_dynamic(
             case=normal_case,
             bonds_per_epoch=bonds,
             default_miners=deafult_miners,
@@ -167,7 +169,7 @@ def generate_metagraph_based_chart_table(
             to_base64=True,
             epochs_padding=epochs_padding,
         )
-        chart_bonds_norm = _plot_bonds_metagraph_dynamic(
+        chart_bonds_norm = charts_utils_plotly._plot_bonds_metagraph_dynamic(
             case=normal_case,
             bonds_per_epoch=bonds,
             default_miners=deafult_miners,

@@ -142,6 +142,7 @@ dependencies = [
   "webencodings>=0.5.1,<1.0.0",
   "websocket-client>=1.8.0,<2.0.0",
   "widgetsnbextension>=4.0.13,<5.0.0",
+  "plotly>=6.1.2",
 ]
 
 [build-system]
