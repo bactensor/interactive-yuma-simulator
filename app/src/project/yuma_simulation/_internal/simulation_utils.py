@@ -167,9 +167,9 @@ def _run_dynamic_simulation(
                 old_validators=old_validators,
                 old_miner_indices=old_miner_indices,
             )
-        
+
         should_align_consensus_state = (
-            C_state is not None 
+            C_state is not None
             and (C_state.shape[0] != current_miner_count)
         )
 
@@ -297,7 +297,7 @@ def _call_yuma(
             simulation_names.YUMA3,
             simulation_names.YUMA3_LIQUID,
         ]
-        and B_state is not None 
+        and B_state is not None
         and epoch == case.reset_bonds_epoch
         ))
     )
@@ -397,9 +397,9 @@ def _update_validators_relative_dividends(
         relative_dividends_per_validator[validator].append(D_normalized[i].item() - S_norm[i].item())
 
 def _compute_dividend_for_validator(
-    i: int, 
-    S: torch.Tensor, 
-    D_normalized: torch.Tensor, 
+    i: int,
+    S: torch.Tensor,
+    D_normalized: torch.Tensor,
     yuma_config: YumaConfig
 ) -> float:
     """
@@ -465,21 +465,46 @@ def _align_bond_state(
     copying over any overlapping entries from the old bond state.
     """
 
+    # Create mapping dictionaries for O(1) lookups
+    old_validator_map = {validator: i for i, validator in enumerate(old_validators)}
+    old_miner_map = {miner: j for j, miner in enumerate(old_miner_indices)}
+
+    # Find overlapping validators and miners
+    validator_indices = []
+    old_validator_indices = []
+    for i, validator in enumerate(current_validators):
+        if validator in old_validator_map:
+            validator_indices.append(i)
+            old_validator_indices.append(old_validator_map[validator])
+
+    miner_indices = []
+    old_miner_indices_list = []
+    for j, miner in enumerate(current_miner_indices):
+        if miner in old_miner_map:
+            miner_indices.append(j)
+            old_miner_indices_list.append(old_miner_map[miner])
+
+    # Initialize new tensor with zeros
     new_B_state = torch.zeros(
         len(current_validators),
         len(current_miner_indices),
         dtype=B_state.dtype,
         device=B_state.device,
     )
-    for i, cur_validator in enumerate(current_validators):
-        for j, cur_miner in enumerate(current_miner_indices):
-            if cur_validator in old_validators and cur_miner in old_miner_indices:
-                old_i = old_validators.index(cur_validator)
-                old_j = old_miner_indices.index(cur_miner)
-                new_B_state[i, j] = B_state[old_i, old_j]
-            else:
-                new_B_state[i, j] = 0.0
+
+    # Copy overlapping values using advanced indexing
+    if validator_indices and miner_indices:
+        validator_tensor = torch.tensor(validator_indices, device=B_state.device)
+        miner_tensor = torch.tensor(miner_indices, device=B_state.device)
+        old_validator_tensor = torch.tensor(old_validator_indices, device=B_state.device)
+        old_miner_tensor = torch.tensor(old_miner_indices_list, device=B_state.device)
+
+        # Use meshgrid-like indexing to copy the overlapping submatrix
+        new_B_state[validator_tensor[:, None], miner_tensor] = \
+            B_state[old_validator_tensor[:, None], old_miner_tensor]
+
     return new_B_state
+
 
 def _align_matrix(
     mat: torch.Tensor,
@@ -538,7 +563,7 @@ def _generate_draggable_html_table(
 ) -> str:
     """
     Generates a draggable HTML table with custom CSS/JS.
-    
+
     If a summary_table is not provided, it is constructed from table_data.
     """
     if summary_table is None:
@@ -597,12 +622,12 @@ def _generate_ipynb_table(
 ) -> str:
     """
     Generates an HTML table for Jupyter notebooks with custom CSS.
-    
+
     If a summary_table is not provided, it is built from table_data.
     """
     if summary_table is None:
         summary_table = pd.DataFrame(table_data)
-    
+
     custom_css = """
     <style>
         .scrollable-table-container {
@@ -707,7 +732,7 @@ def _generate_relative_dividends_comparisson_table(
       - Normal_<version>
       - Shifted_<version>
       - Comparison_<version>
-    
+
     The "Comparison" column is computed, for each epoch, as the difference between the
     shifted and normal dividends divided by the normalized stake (from case_normal).
     The per-window value is the average of these per-epoch comparisons.
@@ -928,7 +953,7 @@ def _map_validator_names(case: "BaseCase", is_metagraph: bool) -> dict[str, str]
     else:
         final_names = [f"Validator {chr(ord('A') + i)}" for i in range(len(case.validators))]
     return dict(zip(case.validators, final_names))
-    
+
 
 
 def _get_final_case_name(case: BaseCase, yuma_version: str, yuma_config: YumaConfig) -> str:
@@ -943,7 +968,7 @@ def _get_final_case_name(case: BaseCase, yuma_version: str, yuma_config: YumaCon
         final_yuma_name = f"{case.name} - {yuma_version} - [{yuma_config.alpha_low}, {yuma_config.alpha_high}]"
     else:
         final_yuma_name = f"{case.name} - {yuma_version}"
-    
+
     if case.reset_bonds:
         return final_yuma_name + " + bonds reset"
     return final_yuma_name
@@ -1036,13 +1061,13 @@ def _compute_liquid_alpha(
     """
     buy_mask = (W >= B)
     sell_mask = (W < B)
-    
+
     diff_buy = (W - C).clamp(min=0.0, max=1.0)
     diff_sell = (B - W).clamp(min=0.0, max=1.0)
-    
+
     combined_diff = torch.where(buy_mask, diff_buy, diff_sell)
-    
+
     combined_diff = 1.0 / (1.0 + torch.exp(-alpha_sigmoid_steepness * (combined_diff - 0.5)))
-    
+
     alpha_slice = alpha_low + combined_diff * (alpha_high - alpha_low)
     return alpha_slice.clamp(alpha_low, alpha_high)
