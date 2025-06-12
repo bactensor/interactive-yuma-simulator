@@ -204,7 +204,8 @@ class MetagraphCase(BaseCase):
         if requested_validators:
             invalid_validators = [hk for hk in requested_validators if hk not in all_hks]
             requested_validators = [hk for hk in requested_validators if hk in all_hks]
-        else:
+        
+        if not requested_validators:
             validator_max_stake: dict[str, float] = {}
 
             for blk_str, block_weights in weights.items():

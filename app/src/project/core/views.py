@@ -9,7 +9,7 @@ from django.conf import settings
 
 
 import pandas as pd
-from django.http import HttpResponse, HttpResponseServerError
+from django.http import HttpResponse, HttpResponseServerError, JsonResponse
 from django.shortcuts import render
 from django.views.decorators.cache import cache_control
 from requests.exceptions import HTTPError, Timeout
@@ -264,6 +264,19 @@ def metagraph_simulation_view(request):
     except ValueError as e:
         return HttpResponse(str(e), status=400)
 
+    
+    selection_form = SelectionForm(request.GET or None)
+    for hotkey in invalid_validators:
+        selection_form.add_error(
+            "validators_hotkeys",
+            f"Invalid validator hotkey: {hotkey}"
+        )
+    for hotkey in invalid_miners:
+        selection_form.add_error(
+            "miners_hotkeys",
+            f"Invalid miner hotkey: {hotkey}"
+        )
+
     selected_chart_yumas = [(asdict(YumaSimulationNames())[chosen_yuma], yuma_params)]
     all_yumas = list(asdict(YumaSimulationNames()).values())
     summary_versions = [
@@ -280,7 +293,13 @@ def metagraph_simulation_view(request):
         epochs_padding=epochs_padding,
     )
 
-    return HttpResponse(partial_html.data or "No data", status=200)
+    return JsonResponse(
+        {
+            "html": partial_html.data or "No data",
+            "errors": selection_form.errors,
+        },
+        status=200
+    )
 
 def bootstrap_generate_ipynb_table(
     table_data: dict[str, list[str]],

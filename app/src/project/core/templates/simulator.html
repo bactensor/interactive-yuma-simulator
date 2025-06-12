@@ -630,17 +630,26 @@ form#simulationForm .form-check-inline {
             );
 
             try {
-              const res  = await fetch(url);
-              const html = await res.text();
+              const res = await fetch(url);
               if (!res.ok) {
-                // server‐side validation error (e.g. bad block range or invalid validators)
-                chartWrapper.innerHTML = `<div style="color:red;">${html}</div>`;
-              } else {
-                chartWrapper.innerHTML = `
-                  <div class="card shadow case-container mb-4">
-                    <div class="card-header"><strong>Metagraph Simulation</strong></div>
-                    <div class="card-body p-3">${html}</div>
-                  </div>`;
+                const text = await res.text();
+                chartWrapper.innerHTML = `<div style="color:red;">${text}</div>`;
+                return;
+              }
+
+              const payload = await res.json();
+
+              chartWrapper.innerHTML = `
+                <div class="card shadow case-container mb-4">
+                  <div class="card-header"><strong>Metagraph Simulation</strong></div>
+                  <div class="card-body p-3">${payload.html}</div>
+                </div>`;
+
+              if (payload.errors.validators_hotkeys) {
+                showInvalid("id_validators_hotkeys", payload.errors.validators_hotkeys);
+              }
+              if (payload.errors.miners_hotkeys) {
+                showInvalid("id_miners_hotkeys", payload.errors.miners_hotkeys);
               }
             } catch (err) {
               chartWrapper.innerHTML = `<div style="color:red;">Error: ${err.message}</div>`;
@@ -847,6 +856,28 @@ form#simulationForm .form-check-inline {
     });
       hotkeyCheckbox.dispatchEvent(new Event("change"));
   });
+
+function showInvalid(fieldId, messages) {
+  const textarea = document.getElementById(fieldId);
+  if (!textarea) return;
+
+  const feedbackId = fieldId + "-feedback";
+  let feedback = document.getElementById(feedbackId);
+  if (!feedback) {
+    feedback = document.createElement("div");
+    feedback.id = feedbackId;
+    feedback.className = "invalid-feedback d-block";
+    textarea.parentNode.appendChild(feedback);
+  }
+
+  if (messages && messages.length) {
+    textarea.classList.add("is-invalid");
+    feedback.textContent = messages.join(", ");
+  } else {
+    textarea.classList.remove("is-invalid");
+    feedback.textContent = "";
+  }
+}
 </script>
 
 
@@ -863,6 +894,8 @@ form#simulationForm .form-check-inline {
     }
   });
 </script>
+
+
 
 </body>
 </html>
