@@ -44,23 +44,6 @@ def simulation_view(request):
     if selection_form.is_valid() and hyper_form.is_valid() and yuma_form.is_valid():
         cleaned = selection_form.cleaned_data
 
-        if cleaned.get("use_metagraph", False):
-            start = cleaned["start_date"]
-            netuid = cleaned["netuid"]
-            raw_validators = cleaned.get("validators", "")
-
-            if raw_validators:
-                picked = validate_validators(
-                    selection_form,
-                    start_date=start,
-                    netuid=netuid,
-                    raw_validators=raw_validators,
-                )
-                if picked is not None:
-                    cleaned["validators"] = picked
-            else:
-                cleaned["validators"] = None
-
         if selection_form.is_valid():
             context["valid_forms"] = True
 
@@ -206,23 +189,13 @@ def metagraph_simulation_view(request):
         
         netuid = int(request.GET.get("netuid", 0))
 
-        raw_validators = request.GET.get("validators", "").strip()
-        if raw_validators:
-            try:
-                requested_validators = [int(v) for v in raw_validators.split(",")]
-            except ValueError:
-                return HttpResponseBadRequest("Validator IDs must be integers.")
-        else:
-            requested_validators = None
+        requested_validators = [v.strip()
+                        for v in request.GET.getlist("validators_hotkeys")
+                        if v.strip()]
 
-        raw_miners = request.GET.get("miners", "").strip()
-        if raw_miners:
-            try:
-                requested_miners = [int(m) for m in raw_miners.split(",")]
-            except ValueError:
-                return HttpResponseBadRequest("Miner IDs must be integers.")
-        else:
-            requested_miners = None
+        requested_miners = [m.strip()
+                    for m in request.GET.getlist("miners_hotkeys")
+                    if m.strip()]
 
         raw_alpha_tao = float(request.GET.get("alpha_tao_ratio", 0.1))
         
@@ -268,12 +241,22 @@ def metagraph_simulation_view(request):
     except HTTPError as e:
         if e.response is not None and e.response.status_code == 404:
             return HttpResponse(f"No metagraph data for timespan {start_date}–{end_date}", status=404)
+        if e.response is not None and e.response.status_code >= 500:
+            html = """
+            <div class="alert alert-danger">
+              <strong>Internal Server Error</strong>
+              <ul class="mb-0">
+                <li>Make sure you’re querying historical metagraph data no older than 35 days ago.</li>
+              </ul>
+            </div>
+            """
+            return HttpResponse(html, status=500)
         return HttpResponse(f"Error fetching metagraph data: {e}", status=400)
     except Exception as e:
         return HttpResponse(f"Error fetching metagraph data: {e}", status=400)
 
     try:
-        case = MetagraphCase.from_mg_dumper_data(
+        case, invalid_validators, invalid_miners = MetagraphCase.from_mg_dumper_data(
             mg_data=mg_data,
             requested_validators=requested_validators,
             requested_miners=requested_miners,
@@ -298,98 +281,6 @@ def metagraph_simulation_view(request):
     )
 
     return HttpResponse(partial_html.data or "No data", status=200)
-
-
-def validate_validators(
-    form,
-    start_date: datetime,
-    netuid: int,
-    raw_validators: str,
-    stake_threshold: int = 1000,
-) -> list[int] | None:
-    picked, errors = check_validators(
-        start_date=start_date,
-        netuid=netuid,
-        raw_validators=raw_validators,
-        stake_threshold=stake_threshold,
-    )
-
-    for field, message in errors:
-        form.add_error(field, message)
-
-    return picked
-
-
-@lru_cache(maxsize=128)
-def check_validators(
-    start_date: datetime,
-    netuid: int,
-    raw_validators: str,
-    stake_threshold: int = 1000,
-) -> tuple[list[int] | None, list[tuple[str, str]]]:
-    """
-    Fetch metagraph data for `start_block`/`netuid`,
-    validate the comma-separated IDs in `raw_validators`
-    against the first‐epoch stakes, and returns errors than can be
-    populated to form. Returns a list of ints (possibly empty)
-    or None if the fetch itself failed in a fatal way.
-    """
-    #TODO(Konrad): refactor the function to work with hotkeys not uids 
-    errors: list[tuple[str, str]] = []
-    try:
-        mg_data = fetch_metagraph_data(
-            start_date=start_date,
-            end_date=start_date + pd.Timedelta(hours=2),
-            netuid=netuid,
-        )
-    except HTTPError as e:
-        resp = e.response
-        detail = None
-        try:
-            detail = resp.json().get("error")
-        except ValueError:
-            detail = resp.text[:200]
-        if resp.status_code == 404:
-            msg = f"No metagraph data for date {start_date}"
-        else:
-            msg = f"Error fetching metagraph data ({resp.status_code}): {detail}"
-        errors.append(("start_date", msg))
-        return None
-    except Exception as e:
-        errors.append(("start_date", f"Error fetching metagraph data: {e}"))
-        return None
-
-
-    # extract uids & stakes
-    uids = mg_data.get("uids", [])
-    stakes = mg_data.get("stakes", {})
-    if not stakes:
-        errors.append(("start_date", "Metagraph returned no stakes data"))
-        return None
-
-    first_block = next(iter(stakes))
-    first_stakes = stakes[first_block]
-    valid_idxs = {int(idx_str) for idx_str, stake in first_stakes.items() if stake > stake_threshold}
-    valid_uids = {uids[i] for i in valid_idxs if i < len(uids)}
-
-    # parse and validate the raw comma-list
-    picked_validators: list[int] = []
-    for tok in raw_validators.split(","):
-        tok = tok.strip()
-        if not tok:
-            continue
-        try:
-            vid = int(tok)
-        except ValueError:
-            errors.append(("validators", f"‘{tok}’ is not a valid integer"))
-            continue
-
-        picked_validators.append(vid)
-        if vid not in valid_uids:
-            errors.append(("validators", f"Validator ID {vid} has <1000 stake in block {first_block}"))
-
-    return picked_validators, errors
-
 
 def bootstrap_generate_ipynb_table(
     table_data: dict[str, list[str]],

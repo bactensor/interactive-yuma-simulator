@@ -304,6 +304,34 @@ body {
   max-width: none !important;
 }
 
+form#simulationForm .form-check {
+  display: flex;
+  align-items: center;
+  margin-bottom: 0;
+}
+
+form#simulationForm .form-check-input {
+  margin-right: 0.5rem;
+  margin-top: 0;
+}
+
+form#simulationForm .form-check-inline {
+  align-items: center !important;
+}
+
+.row.liquid-alpha-effective-group,
+.row.liquid-alpha-effective-group > [class*="col-"] {
+  margin: 0 !important;
+  --bs-gutter-x: 0 !important;
+  padding: 0 !important;
+}
+.row.liquid-alpha-effective-group .form-check {
+  margin-top: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.liquid-alpha-effective-group.mb-3 {
+  margin-bottom: 0 !important;
+}
 
 </style>
 <body>
@@ -350,9 +378,12 @@ body {
                       {% crispy selection_form %}
 
                       {# ─────────── Show a checkbox instead of a button ─────────── #}
-                      <div class="form-check form-check-inline ml-4" 
-                          style="margin-top: 0.75rem; display: none !important;">
-                        <input class="form-check-input" type="checkbox" id="id_show_advanced">
+                      <div class="form-check form-check-inline ml-4">
+                        <input class="form-check-input"
+                          type="checkbox"
+                          id="id_show_advanced"
+                          name="show_advanced"
+                          {% if request.GET.show_advanced %}checked{% endif %}>
                         <label class="form-check-label" for="id_show_advanced">Advanced Settings</label>
                       </div>
 
@@ -556,6 +587,19 @@ body {
           const simParams = yumasData.sim_params;
           const yParams   = yumasData.yuma_params;
 
+          function linesFromTextarea(id) {
+            const raw = document.getElementById(id)?.value || "";
+            return raw
+              .split(/\r?\n/)        // split on Unix or Windows newlines
+              .map(line => line.trim())
+              .filter(line => line.length > 0);
+          }
+
+          const sendHotkeys = useMetagraphEl.checked 
+                            && document.getElementById("id_show_advanced").checked;
+          const validatorLines = sendHotkeys ? linesFromTextarea("id_validators_hotkeys") : [];
+          const minerLines     = sendHotkeys ? linesFromTextarea("id_miners_hotkeys")     : [];
+
           if (useMetagraphEl.checked) {
             // ─── metagraph call ────────────────────────────────────────────
             const url = new URL(metagraphUrl, window.location.origin);
@@ -578,6 +622,12 @@ body {
             url.searchParams.set("end_date",                  endDateEl.value);
             url.searchParams.set("netuid",                      netuidEl.value);
             url.searchParams.set("_ck",    cache_key);
+            validatorLines.forEach(key =>
+              url.searchParams.append("validators_hotkeys", key)
+            );
+            minerLines.forEach(key =>
+              url.searchParams.append("miners_hotkeys", key)
+            );
 
             try {
               const res  = await fetch(url);
@@ -795,6 +845,7 @@ body {
         hotkeySection.classList.add("d-none");
       }
     });
+      hotkeyCheckbox.dispatchEvent(new Event("change"));
   });
 </script>
 
