@@ -77,18 +77,6 @@ class SelectionForm(forms.Form):
         label="Select Yuma Version",
     )
 
-    validators_hotkeys = forms.CharField(
-        required=False,
-        label="Validators Hotkeys",
-        widget=forms.Textarea(
-            attrs={
-                "class": "form-control",
-                "rows": 3,
-                "placeholder": "Paste one validator hotkey per line…",
-                "id": "id_validators_hotkeys",
-            }
-        )
-    )
     miners_hotkeys = forms.CharField(
         required=False,
         label="Miners Hotkeys",
@@ -114,26 +102,28 @@ class SelectionForm(forms.Form):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+        if self.is_bound and self.data.get("use_metagraph") in ("on", "True", "true", "1"):
+            self.fields["netuid"].required = True
+
+        now_utc   = timezone.now().astimezone(dt_timezone.utc)
+        now_naive = now_utc.replace(tzinfo=None)
+        now_iso   = now_naive.isoformat(timespec="seconds")
+        two_days_ago = (now_naive - timedelta(days=2)).isoformat(timespec="seconds")
+        five_days_later = (now_naive + timedelta(days=5)).isoformat(timespec="seconds")
+
         if not self.is_bound:
             self.fields['selected_yumas'].initial = 'YUMA2'
             self.fields['selected_cases'].initial = [
                 "Case 2 - kappa moves second"
             ]
+            self.fields["start_date"].initial = two_days_ago
+            self.fields["end_date"].initial   = now_iso
 
-        now_utc   = timezone.now().astimezone(dt_timezone.utc)
-        now_naive = now_utc.replace(tzinfo=None)
-        ts        = now_naive.isoformat(timespec='seconds')
-
-        three_weeks_ago   = (now_naive - timedelta(weeks=3)).isoformat(timespec='seconds')
-        three_days_future = (now_naive + timedelta(days=3)).isoformat(timespec='seconds')
-
-        self.fields['start_date'].widget.attrs.update({
-            'min': three_weeks_ago,
-            'max': ts,
+        self.fields["start_date"].widget.attrs.update({
+            "max": now_iso,
         })
-        self.fields['end_date'].widget.attrs.update({
-            'min': three_weeks_ago,
-            'max': three_days_future,
+        self.fields["end_date"].widget.attrs.update({
+            "max": five_days_later,
         })
         
         self.helper = FormHelper(self)
@@ -172,31 +162,39 @@ class SelectionForm(forms.Form):
 
     def clean(self):
         cleaned = super().clean()
-        if cleaned.get('use_metagraph'):
-            start = cleaned.get('start_date')
-            end   = cleaned.get('end_date')
+        if cleaned.get("use_metagraph"):
 
-            now_utc = timezone.now().astimezone(dt_timezone.utc)
+            if cleaned.get("netuid") in (None, ""):
+                self.add_error("netuid", "Subnet ID is required.")
 
+            start = cleaned.get("start_date")
+            end   = cleaned.get("end_date")
+
+            if not start or not end:
+                raise forms.ValidationError(
+                    "Both start and end datetimes are required when Metagraph is enabled."
+                )
 
             start_utc = start.astimezone(dt_timezone.utc)
             end_utc   = end.astimezone(dt_timezone.utc)
+            now_utc   = timezone.now().astimezone(dt_timezone.utc)
 
-            if not start or not end:
-                raise forms.ValidationError("Both start and end datetimes are required.")
 
-            if start_utc > now_utc:
-                self.add_error('start_date', "Start cannot be in the future.")
             if end_utc > now_utc:
-                self.add_error('end_date',   "End cannot be in the future.")
+                self.add_error("end_date", "End cannot be in the future.")
 
-            if start_utc < now_utc - timedelta(weeks=3):
-                self.add_error('start_date', "Start cannot be more than 3 weeks ago.")
-            if end_utc > start_utc + timedelta(days=3):
-                self.add_error('end_date',   "End cannot be more than 3 days after start.")
+            if end_utc > start_utc + timedelta(days=5):
+                self.add_error(
+                    "end_date",
+                    "End cannot be more than 5 days after start."
+                )
 
             if end_utc < start_utc:
-                self.add_error('end_date',   "End cannot be before start.")
+                self.add_error(
+                    "end_date",
+                    "End cannot be before start."
+                )
+
         return cleaned
 
 class SimulationHyperparametersForm(forms.Form):

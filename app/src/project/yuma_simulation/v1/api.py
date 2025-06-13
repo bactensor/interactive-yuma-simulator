@@ -14,6 +14,7 @@ from project.yuma_simulation._internal.charts_utils import (
     _pick_default_miners,
 )
 from project.yuma_simulation._internal.simulation_utils import (
+    _generate_html_table,
     _generate_draggable_html_table,
     _generate_ipynb_table,
     _run_simulation,
@@ -85,7 +86,7 @@ def generate_chart_table(
 
     summary_table = pd.DataFrame(table_data)
     if draggable_table:
-        full_html = _generate_draggable_html_table(table_data, summary_table, case_row_ranges)
+        full_html = _generate_html_table(table_data, summary_table, case_row_ranges)
     else:
         full_html = _generate_ipynb_table(table_data, summary_table, case_row_ranges)
 
@@ -196,7 +197,7 @@ def generate_metagraph_based_chart_table(
     total_rows = len(next(iter(table_data.values())))
     case_row_ranges = [(i, i, i) for i in range(total_rows)]
     df_full = pd.DataFrame(table_data)
-    full_html = _generate_draggable_html_table(table_data, df_full, case_row_ranges)
+    full_html = _generate_html_table(table_data=table_data, summary_table=df_full, case_row_ranges=case_row_ranges, draggable=draggable_table)
     return HTML(full_html)
 
 
@@ -282,7 +283,7 @@ def generate_metagraph_based_chart_table_shifted_comparisson(
     case_row_ranges = [(0, 0, 0), (1, 1, 1), (2, 2, 2), (3, 3, 3)]
     summary_table = pd.DataFrame(table_data)
     if draggable_table:
-        full_html = _generate_draggable_html_table(table_data, summary_table, case_row_ranges)
+        full_html = _generate_html_table(table_data, summary_table, case_row_ranges)
     else:
         full_html = _generate_ipynb_table(table_data, summary_table, case_row_ranges)
 
