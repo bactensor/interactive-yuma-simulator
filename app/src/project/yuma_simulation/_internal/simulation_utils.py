@@ -555,7 +555,6 @@ def _align_weights_consensus_state(
 
     return new_C_state
 
-
 def _generate_draggable_html_table(
     table_data: dict[str, list[str]],
     summary_table: pd.DataFrame | None,
@@ -614,6 +613,84 @@ def _generate_draggable_html_table(
     table_html = _build_html_table(summary_table, case_row_ranges)
     container_html = f'<div class="scrollable-table-container">{table_html}</div>'
     return custom_css_js + container_html
+
+def _generate_html_table(
+    table_data: dict[str, list[str]],
+    summary_table: pd.DataFrame | None,
+    case_row_ranges: list[tuple[int, int, int]],
+    *,
+    draggable: bool = True,
+    in_notebook: bool = False,
+) -> str:
+    """
+    Generates an HTML table, either for a standalone page (with optional drag-to-scroll)
+    or for a Jupyter notebook (no drag, only horizontal scroll).
+    """
+    if summary_table is None:
+        summary_table = pd.DataFrame(table_data)
+
+    # Base CSS for both modes
+    css = """
+    <style>
+        .scrollable-table-container {
+            background-color: #FFFFFF;
+            width: 100%;
+            overflow-x: auto;
+            overflow-y: auto;
+            border: 1px solid #ccc;
+            /* removed white-space: nowrap to allow cell wrapping */
+        }
+        table {
+            border-collapse: collapse;
+            margin: 0;
+            width: auto;
+        }
+        td, th {
+            padding: 10px;
+            vertical-align: top;
+            text-align: center;
+            white-space: normal;  /* allow long text to wrap */
+        }
+        .case-group-even td { background-color: #FFFFFF !important; }
+        .case-group-odd  td { background-color: #F0F0F0 !important; }
+    </style>
+    """
+
+    js = ""
+    if draggable and not in_notebook:
+        css = css.replace(
+            ".scrollable-table-container {",
+            ".scrollable-table-container { cursor: grab; user-select: none; -ms-overflow-style: auto; scrollbar-width: auto;"
+        )
+        js = """
+        <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            const container = document.querySelector('.scrollable-table-container');
+            let isDown = false, startX, startY, scrollLeft, scrollTop;
+            container.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                isDown = true;
+                startX = e.clientX; startY = e.clientY;
+                scrollLeft = container.scrollLeft; scrollTop = container.scrollTop;
+            });
+            document.addEventListener('mouseup', () => { isDown = false; });
+            document.addEventListener('mousemove', (e) => {
+                if (!isDown) return;
+                e.preventDefault();
+                const walkX = e.clientX - startX, walkY = e.clientY - startY;
+                container.scrollLeft = scrollLeft - walkX;
+                container.scrollTop  = scrollTop  - walkY;
+            });
+            container.addEventListener('dragstart', e => e.preventDefault());
+        });
+        </script>
+        """
+
+    table_html     = _build_html_table(summary_table, case_row_ranges)
+    container_html = f'<div class="scrollable-table-container">{table_html}</div>'
+
+    return css + js + container_html
+
 
 def _generate_ipynb_table(
     table_data: dict[str, list[str]],

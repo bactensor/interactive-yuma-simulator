@@ -556,37 +556,8 @@ def _plot_bonds_metagraph_dynamic(
             if v not in validator_keys:
                 validator_keys.append(v)
 
-    #TODO(handle this better)
-    m_idx = []
-    for m in subset_m:
-        mi = None
-        for me in miners_epochs:
-            try:
-                mi = me.index(m)
-            except ValueError:
-                pass
-            else:
-                break
-        if mi is None:
-            raise RuntimeError('AAAAA')
-        else:
-            m_idx.append(mi)
-    # m_idx = [miner_keys.index(m)     for m in subset_m]
-    v_idx = []
-    for v in subset_v:
-        vi = None
-        for ve in validators_epochs:
-            try:
-                vi = ve.index(v)
-            except ValueError:
-                pass
-            else:
-                break
-        if vi is None:
-            raise RuntimeError('AAAAA')
-        else:
-            v_idx.append(vi)
-    # v_idx = [validator_keys.index(v) for v in subset_v]
+    m_idx = _find_indices(subset_m, miners_epochs,    name="miner")
+    v_idx = _find_indices(subset_v, validators_epochs, name="validator")
 
     plot_data: list[list[list[float]]] = []
     for mi in m_idx:
@@ -743,9 +714,6 @@ def _plot_bonds_metagraph_dynamic(
     plt.show()
     plt.close(fig)
     return None
-
-
-
 
 def _plot_validator_server_weights(
     validators: list[str],
@@ -1543,3 +1511,27 @@ def _pick_default_miners(
         ][:2]
 
     return top_two_by_total + top_two_by_spread
+
+from typing import Any, Sequence
+
+def _find_indices(
+    subset: Sequence[Any],
+    epochs_list: Sequence[Sequence[Any]],
+    name: str = "item",
+) -> list[int]:
+    """
+    For each element in `subset`, find its .index(…) in the first
+    sub‐sequence of `epochs_list` that contains it. If any element
+    is missing, raise a RuntimeError with a clear message.
+    """
+    indices: list[int] = []
+    for x in subset:
+        # generator: e.index(x) only if x in e
+        idx = next(
+            (epoch.index(x) for epoch in epochs_list if x in epoch),
+            None
+        )
+        if idx is None:
+            raise RuntimeError(f"{name!r} {x!r} not found in any epoch")
+        indices.append(idx)
+    return indices

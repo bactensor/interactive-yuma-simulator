@@ -245,54 +245,79 @@ def filter_duplicate_validators(
         if int(idx_str) in indices_to_keep
     }
 
+def ordered_weights_for_uids(
+    weight_map: dict[str, dict[str, float]],
+    uids: list[int],
+    n_slots: Optional[int] = None,
+) -> torch.Tensor:
+    """
+    Build a (256×256) or (1024×1024) weight matrix.
 
-def ordered_weights_for_uids(weight_map: dict[str, dict[str, float]], uids: list[int]) -> torch.Tensor:
+    Args:
+      weight_map: { str(idx_i) → { str(idx_j) → weight } }
+      uids:       list where uids[idx] is the global UID for that row/col.
+      n_slots:    if None, auto-detect: any uid ≥256 → 1024, else 256;
+                  otherwise uses exactly this number of slots.
+
+    Returns:
+      Tensor of shape (n_slots, n_slots) with weight_map values placed
+      at (ui, uj), defaults to 0.0 elsewhere.
+    """
     N = len(uids)
-    # Use numpy array instead of nested lists
-    result = np.zeros((256, 256), dtype=np.float32)
 
+    if n_slots is None:
+        max_uid = max(uids) if uids else -1
+        n_slots = 1024 if max_uid > 255 else 256
+
+    result = np.zeros((n_slots, n_slots), dtype=np.float32)
     for idx_i_str, row in weight_map.items():
         i = int(idx_i_str)
         if 0 <= i < N:
             ui = uids[i]
-            if ui < 256:
+            if 0 <= ui < n_slots:
                 for idx_j_str, w in row.items():
                     j = int(idx_j_str)
                     if 0 <= j < N:
                         uj = uids[j]
-                        if uj < 256:
+                        if 0 <= uj < n_slots:
                             result[ui, uj] = float(w)
-
     return torch.from_numpy(result)
 
 
 def ordered_stakes_for_uids(
     stakes_map: dict[str, float],
     uids: list[int],
+    n_slots: Optional[int] = None,
 ) -> torch.Tensor:
     """
-    stakes_map: dict[str(idx) → stake]
-    uids: list of all UIDs, where each idx_str in stakes_map references uids[idx]
+    Build a length-256 or length-1024 stake vector.
 
-    Returns a tensor S of length 256 where
-        S[i] = stake for uid=i, or 0.0 if missing.
+    Args:
+      stakes_map: { str(idx) → stake } referring to uids[idx].
+      uids:       list where uids[idx] is the global UID.
+      n_slots:    if None, auto-detect: any uid ≥256 → 1024, else 256;
+                  otherwise uses exactly this number of slots.
+
+    Returns:
+      Tensor S of length n_slots where S[uid] is the max stake seen,
+      or 0.0 if none.
     """
     N = len(uids)
 
-    # Use numpy array instead of list
-    result = np.zeros(256, dtype=np.float32)
+    if n_slots is None:
+        max_uid = max(uids) if uids else -1
+        n_slots = 1024 if max_uid > 255 else 256
 
+    result = np.zeros(n_slots, dtype=np.float32)
     for idx_str, stake in stakes_map.items():
         idx = int(idx_str)
         if 0 <= idx < N:
             uid = uids[idx]
-            if uid < 256:  # bounds check
-                # for duplicated uids choose highest stake
-                if float(stake) >= result[uid]:
-                    result[uid] = float(stake)
-
+            if 0 <= uid < n_slots:
+                val = float(stake)
+                if val > result[uid]:
+                    result[uid] = val
     return torch.from_numpy(result)
-
 
 def epoch_hotkeys_by_uid(
     hotkeys: list[str],
