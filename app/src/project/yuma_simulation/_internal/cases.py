@@ -176,16 +176,12 @@ class MetagraphCase(BaseCase):
     def from_mg_dumper_data(
         cls,
         mg_data: dict[str, Any],
-        requested_validators: Optional[list[str]] = None,
         requested_miners: Optional[list[str]] = None,
     ) -> tuple["MetagraphCase", list[str], list[str]]:
         uids = mg_data["uids"]
         hotkeys = mg_data["hotkeys"]
         weights = mg_data["weights"]
         stakes = mg_data["stakes"]
-
-        print(f"max uid: {max(uids)}")
-
         weights = {
             blk: filter_duplicate_validators(blk_weights, uids, stakes[blk], hotkeys)
             for blk, blk_weights in weights.items()
@@ -198,36 +194,32 @@ class MetagraphCase(BaseCase):
             blocks   = mg_data["blocks"],
         )
 
-        all_hks = set().union(*(set(hks) for hks in epoch_hks.values()))
+        validator_max_stake: dict[str, float] = {}
 
-        invalid_validators: list[str] = []
-        if requested_validators:
-            invalid_validators = [hk for hk in requested_validators if hk not in all_hks]
-            requested_validators = [hk for hk in requested_validators if hk in all_hks]
-        
-        if not requested_validators:
-            validator_max_stake: dict[str, float] = {}
+        for blk_str, block_weights in weights.items():
+            for src_idx_str in block_weights.keys():
+                src_idx = int(src_idx_str)
+                hk_src = hotkeys[src_idx]
 
-            for blk_str, block_weights in weights.items():
-                for src_idx_str in block_weights.keys():
-                    src_idx = int(src_idx_str)
-                    hk_src = hotkeys[src_idx]
+                stake_amt = stakes.get(blk_str, {}).get(src_idx_str, 0.0)
 
-                    stake_amt = stakes.get(blk_str, {}).get(src_idx_str, 0.0)
+                prev_max = validator_max_stake.get(hk_src, 0.0)
+                if stake_amt > prev_max:
+                    validator_max_stake[hk_src] = stake_amt
 
-                    prev_max = validator_max_stake.get(hk_src, 0.0)
-                    if stake_amt > prev_max:
-                        validator_max_stake[hk_src] = stake_amt
-
-            sorted_validators = sorted(
-                validator_max_stake.items(),
-                key=lambda kv: kv[1],
-                reverse=True
-            )
-            requested_validators = [hk for (hk, _) in sorted_validators[:5]]
+        sorted_validators = sorted(
+            validator_max_stake.items(),
+            key=lambda kv: kv[1],
+            reverse=True
+        )
+        requested_validators = [
+            hk for (hk, stake) in sorted_validators
+            if stake >= 1000
+        ]
 
         invalid_miners: list[str] = []
         if requested_miners:
+            all_hks = set().union(*(set(hks) for hks in epoch_hks.values()))
             invalid_miners = [hk for hk in requested_miners if hk not in all_hks]
             requested_miners = [hk for hk in requested_miners if hk in all_hks]
 
@@ -264,7 +256,7 @@ class MetagraphCase(BaseCase):
 
         case.selected_servers = requested_miners or []
 
-        return case, invalid_validators, invalid_miners
+        return case, invalid_miners
 
     @property
     def weights_epochs(self) -> list[torch.Tensor]:

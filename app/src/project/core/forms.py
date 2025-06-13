@@ -66,7 +66,7 @@ class SelectionForm(forms.Form):
     )
 
     netuid = forms.IntegerField(
-        required=True,
+        required=False,
         label="Subnet ID",
         widget=forms.NumberInput(attrs={"class": "form-control", "id": "id_netuid"}),
     )
@@ -77,18 +77,6 @@ class SelectionForm(forms.Form):
         label="Select Yuma Version",
     )
 
-    validators_hotkeys = forms.CharField(
-        required=False,
-        label="Validators Hotkeys",
-        widget=forms.Textarea(
-            attrs={
-                "class": "form-control",
-                "rows": 3,
-                "placeholder": "Paste one validator hotkey per line…",
-                "id": "id_validators_hotkeys",
-            }
-        )
-    )
     miners_hotkeys = forms.CharField(
         required=False,
         label="Miners Hotkeys",
@@ -113,6 +101,9 @@ class SelectionForm(forms.Form):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+        if self.is_bound and self.data.get("use_metagraph") in ("on", "True", "true", "1"):
+            self.fields["netuid"].required = True
 
         now_utc   = timezone.now().astimezone(dt_timezone.utc)
         now_naive = now_utc.replace(tzinfo=None)
@@ -172,6 +163,10 @@ class SelectionForm(forms.Form):
     def clean(self):
         cleaned = super().clean()
         if cleaned.get("use_metagraph"):
+
+            if cleaned.get("netuid") in (None, ""):
+                self.add_error("netuid", "Subnet ID is required.")
+
             start = cleaned.get("start_date")
             end   = cleaned.get("end_date")
 

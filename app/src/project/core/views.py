@@ -188,11 +188,6 @@ def metagraph_simulation_view(request):
             return HttpResponseBadRequest("Dates must be in YYYY-MM-DD format.")
         
         netuid = int(request.GET.get("netuid", 0))
-
-        requested_validators = [v.strip()
-                        for v in request.GET.getlist("validators_hotkeys")
-                        if v.strip()]
-
         requested_miners = [m.strip()
                     for m in request.GET.getlist("miners_hotkeys")
                     if m.strip()]
@@ -256,9 +251,8 @@ def metagraph_simulation_view(request):
         return HttpResponse(f"Error fetching metagraph data: {e}", status=400)
 
     try:
-        case, invalid_validators, invalid_miners = MetagraphCase.from_mg_dumper_data(
+        case, invalid_miners = MetagraphCase.from_mg_dumper_data(
             mg_data=mg_data,
-            requested_validators=requested_validators,
             requested_miners=requested_miners,
             )
     except ValueError as e:
@@ -266,11 +260,6 @@ def metagraph_simulation_view(request):
 
     
     selection_form = SelectionForm(request.GET or None)
-    for hotkey in invalid_validators:
-        selection_form.add_error(
-            "validators_hotkeys",
-            f"Invalid validator hotkey: {hotkey}"
-        )
     for hotkey in invalid_miners:
         selection_form.add_error(
             "miners_hotkeys",

@@ -389,7 +389,6 @@ form#simulationForm .form-check-inline {
 
                       {# ─────────── The two hotkey textareas, hidden by default ─────────── #}
                       <div id="advanced_settings" class="ml-4 d-none" style="margin-top: 0.5rem;">
-                        {{ selection_form.validators_hotkeys|as_crispy_field }}
                         {{ selection_form.miners_hotkeys|as_crispy_field }}
                       </div>
 
@@ -597,7 +596,6 @@ form#simulationForm .form-check-inline {
 
           const sendHotkeys = useMetagraphEl.checked 
                             && document.getElementById("id_show_advanced").checked;
-          const validatorLines = sendHotkeys ? linesFromTextarea("id_validators_hotkeys") : [];
           const minerLines     = sendHotkeys ? linesFromTextarea("id_miners_hotkeys")     : [];
 
           if (useMetagraphEl.checked) {
@@ -622,9 +620,6 @@ form#simulationForm .form-check-inline {
             url.searchParams.set("end_date",                  endDateEl.value);
             url.searchParams.set("netuid",                      netuidEl.value);
             url.searchParams.set("_ck",    cache_key);
-            validatorLines.forEach(key =>
-              url.searchParams.append("validators_hotkeys", key)
-            );
             minerLines.forEach(key =>
               url.searchParams.append("miners_hotkeys", key)
             );
@@ -645,9 +640,6 @@ form#simulationForm .form-check-inline {
                   <div class="card-body p-3">${payload.html}</div>
                 </div>`;
 
-              if (payload.errors.validators_hotkeys) {
-                showInvalid("id_validators_hotkeys", payload.errors.validators_hotkeys);
-              }
               if (payload.errors.miners_hotkeys) {
                 showInvalid("id_miners_hotkeys", payload.errors.miners_hotkeys);
               }
