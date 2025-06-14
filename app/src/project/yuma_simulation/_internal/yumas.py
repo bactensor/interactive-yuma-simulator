@@ -155,7 +155,7 @@ def compute_incentive(R: torch.Tensor, config: YumaConfig):
         return I
 
 
-def YumaRust(
+def YumaSubtensorOld(
     W: torch.Tensor,
     S: torch.Tensor,
     num_servers: int,
@@ -251,6 +251,99 @@ def YumaRust(
         "alpha_b": b,
     }
 
+def YumaSubtensor(
+    W: torch.Tensor,
+    S: torch.Tensor,
+    num_servers: int,
+    num_validators: int,
+    use_full_matrices: bool,
+    B_old: [torch.Tensor] = None,
+    C_old: [torch.Tensor] = None,
+    config: YumaConfig = YumaConfig()
+) -> Dict[str, torch.Tensor | None | float]:
+    """
+    Currently implemented Subtensor Yuma function.
+    """
+
+    # === Weight ===
+    W = (W.T / (W.sum(dim=1) + 1e-6)).T
+
+    # === Stake ===
+    S = S / S.sum()
+
+    # === Prerank ===
+    P = (S.view(-1, 1) * W).sum(dim=0)
+
+    # === Consensus ===
+    C = compute_consensus_weights(W, S, config)
+
+    C = (C / C.sum() * 65_535).int() / 65_535
+
+    # === Consensus clipped weight ===
+    W_clipped = torch.min(W, C)
+
+    # === Rank ===
+    R = (S.view(-1, 1) * W_clipped).sum(dim=0)
+
+    # === Incentive ===
+    I = (R / R.sum()).nan_to_num(0)
+
+    # === Trusts ===
+    T = (R / P).nan_to_num(0)
+    T_v = W_clipped.sum(dim=1) / W.sum(dim=1)
+
+    # === Bonds ===
+    B = S.view(-1, 1) * W_clipped
+    B_sum = B.sum(dim=0)
+    B = B / (B_sum + 1e-6)
+    B = torch.nan_to_num(B)
+
+    a = b = None
+    bond_alpha = 1 - config.bond_moving_avg
+    if config.liquid_alpha:
+        consensus_high = config.override_consensus_high if config.override_consensus_high is not None else C.quantile(0.75)
+        consensus_low = config.override_consensus_low if config.override_consensus_low is not None else C.quantile(0.25)
+
+        if consensus_high == consensus_low:
+            consensus_high = C.quantile(0.99)
+
+        a = (math.log(1 / config.alpha_high - 1) - math.log(1 / config.alpha_low - 1)) / (consensus_low - consensus_high)
+        b = math.log(1 / config.alpha_low - 1) + a * consensus_low
+        alpha = 1 / (1 + math.e ** (-a * C + b))  # alpha to the old weight
+        bond_alpha = 1 - torch.clamp(alpha, config.alpha_low, config.alpha_high)
+
+    if B_old is not None:
+        B_ema = bond_alpha * B + (1 - bond_alpha) * B_old
+    else:
+        B_ema = B.clone()
+
+    B_ema_sum = B_ema.sum(dim=0)
+    B_ema = B_ema / (B_ema_sum + 1e-6)
+    B_ema = torch.nan_to_num(B_ema)
+
+    # === Dividend Calculation===
+    D = (B_ema * I).sum(dim=1)
+    D_normalized = D / (D.sum() + 1e-6)
+
+    return {
+        "weight": W,
+        "stake": S,
+        "server_prerank": P,
+        "server_consensus_weight": C,
+        "consensus_clipped_weight": W_clipped,
+        "server_rank": R,
+        "server_incentive": I,
+        "server_trust": T,
+        "validator_trust": T_v,
+        "validator_bond": B,
+        "validator_ema_bond": B_ema,
+        "validator_reward": D,
+        "validator_reward_normalized": D_normalized,
+        "bond_alpha": bond_alpha,
+        "alpha_a": a,
+        "alpha_b": b
+    }
+
 
 def Yuma(
     W: torch.Tensor,
@@ -297,8 +390,8 @@ def Yuma(
     W_b = (1 - config.bond_penalty) * W + config.bond_penalty * W_clipped
     B = S.view(-1, 1) * W_b
     B_sum = B.sum(dim=0)
-    B = B / B_sum
-    B = B.nan_to_num(0)
+    B = B / (B_sum + 1e-6)
+    B = torch.nan_to_num(B)
 
     a = b = torch.tensor(float("nan"))
     alpha = 1 - config.bond_moving_avg
@@ -319,7 +412,11 @@ def Yuma(
     if B_old is not None:
         B_ema = alpha * B + (1 - alpha) * B_old
     else:
-        B_ema = B
+        B_ema = B.clone()
+
+    B_ema_sum = B_ema.sum(dim=0)
+    B_ema = B_ema / (B_ema_sum + 1e-6)  # changed: added epsilon for numerical stability
+    B_ema = torch.nan_to_num(B_ema)     # changed: clean up NaNs after normalization
 
     # === Dividend ===
     D = (B_ema * I).sum(dim=1)
