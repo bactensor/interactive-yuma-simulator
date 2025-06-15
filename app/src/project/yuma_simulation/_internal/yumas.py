@@ -83,8 +83,9 @@ class YumaConfig:
 
 @dataclass(frozen=True)
 class YumaSimulationNames:
-    YUMA1: str = "Yuma 1"
+    YUMA1: str = "Yuma 1 (legacy yuma)"
     YUMA2: str = "Yuma 2 (subtensor)"
+    YUMA2A: str = "Yuma 2A (paper)"
     YUMA2B: str = "Yuma 2B (Adrian-Fish)"
     YUMA2C: str = "Yuma 2C (Rhef+reset)"
     YUMA3: str = "Yuma 3 (Rhef+relative bonds)"
@@ -155,7 +156,7 @@ def compute_incentive(R: torch.Tensor, config: YumaConfig):
         return I
 
 
-def YumaRust(
+def YumaSubtensorOld(
     W: torch.Tensor,
     S: torch.Tensor,
     num_servers: int,
@@ -166,7 +167,7 @@ def YumaRust(
     config: YumaConfig = YumaConfig(),
 ) -> dict[str, torch.Tensor | str | float]:
     """
-    Currently implemented Subtensor Yuma function.
+    Legacy Subtensor Yuma function.
     """
 
     # === Weight ===
@@ -252,6 +253,104 @@ def YumaRust(
     }
 
 
+def YumaSubtensor(
+    W: torch.Tensor,
+    S: torch.Tensor,
+    num_servers: int,
+    num_validators: int,
+    use_full_matrices: bool,
+    B_old: [torch.Tensor] = None,
+    C_old: [torch.Tensor] = None,
+    config: YumaConfig = YumaConfig()
+) -> Dict[str, torch.Tensor | None | float]:
+    """
+    Currently implemented Subtensor Yuma function.
+    """
+
+    # === Weight ===
+    W = (W.T / (W.sum(dim=1) + 1e-6)).T
+
+    # === Stake ===
+    S = S / S.sum()
+
+    # === Prerank ===
+    P = (S.view(-1, 1) * W).sum(dim=0)
+
+    # === Consensus ===
+    C = compute_consensus_weights(W, S, config)
+
+    C = (C / C.sum() * 65_535).int() / 65_535
+
+    # === Consensus clipped weight ===
+    W_clipped = torch.min(W, C)
+
+    # === Rank ===
+    R = (S.view(-1, 1) * W_clipped).sum(dim=0)
+
+    # === Incentive ===
+    I = compute_incentive(R, config)
+
+    # === Trusts ===
+    T = (R / P).nan_to_num(0)
+    T_v = W_clipped.sum(dim=1) / W.sum(dim=1)
+
+    # === Bonds ===
+    W_b = (1 - config.bond_penalty) * W + config.bond_penalty * W_clipped
+    B = S.view(-1, 1) * W_b
+    B_sum = B.sum(dim=0)
+    B = B / (B_sum + 1e-6)
+    B = torch.nan_to_num(B)
+
+    a = b = torch.tensor(float("nan"))
+    alpha = 1 - config.bond_moving_avg
+    if config.liquid_alpha and (C_old is not None):
+        from .simulation_utils import _compute_liquid_alpha
+        alpha = _compute_liquid_alpha(
+            W=W,
+            B=B_old,
+            C=C,
+            alpha_sigmoid_steepness=config.alpha_sigmoid_steepness,
+            alpha_low=config.alpha_low,
+            alpha_high=config.alpha_high,
+            num_validators=num_validators,
+            num_servers=num_servers,
+            use_full_matrices=use_full_matrices,
+        )
+    if B_old is not None:
+        B_old_sum = B_old.sum(dim=0)
+        B_old = B_old/(B_old_sum + 1e-6)
+        B_ema = alpha * B + (1 - alpha) * B_old
+    else:
+        B_ema = B.clone()
+
+    B_ema_sum = B_ema.sum(dim=0)
+    B_ema = B_ema / (B_ema_sum + 1e-6)
+    B_ema = torch.nan_to_num(B_ema)
+
+    # === Dividend Calculation===
+    D = (B_ema * I).sum(dim=1)
+    D_normalized = D / (D.sum() + 1e-6)
+
+    return {
+        "weight": W,
+        "stake": S,
+        "server_prerank": P,
+        "server_consensus_weight": C,
+        "consensus_clipped_weight": W_clipped,
+        "server_rank": R,
+        "server_incentive": I,
+        "server_trust": T,
+        "validator_trust": T_v,
+        "validator_bond": B,
+        "validator_ema_bond": B_ema,
+        "validator_reward": D,
+        "validator_reward_normalized": D_normalized,
+        "bond_alpha": alpha,
+        "alpha_a": a,
+        "alpha_b": b
+    }
+
+
 def Yuma(
     W: torch.Tensor,
     S: torch.Tensor,
@@ -297,8 +396,8 @@ def Yuma(
     W_b = (1 - config.bond_penalty) * W + config.bond_penalty * W_clipped
     B = S.view(-1, 1) * W_b
     B_sum = B.sum(dim=0)
-    B = B / B_sum
-    B = B.nan_to_num(0)
+    B = B / (B_sum + 1e-6)
+    B = torch.nan_to_num(B)
 
     a = b = torch.tensor(float("nan"))
     alpha = 1 - config.bond_moving_avg
@@ -319,7 +418,7 @@ def Yuma(
     if B_old is not None:
         B_ema = alpha * B + (1 - alpha) * B_old
     else:
-        B_ema = B
+        B_ema = B.clone()
 
     # === Dividend ===
     D = (B_ema * I).sum(dim=1)

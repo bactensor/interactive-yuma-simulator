@@ -15,12 +15,13 @@ from project.yuma_simulation._internal.charts_utils import (
 from project.yuma_simulation._internal.yumas import (
     SimulationHyperparameters,
     Yuma,
+    YumaSubtensor,
     Yuma2b,
     Yuma2c,
     Yuma3,
     YumaConfig,
     YumaParams,
-    YumaRust,
+    YumaSubtensorOld,
     YumaSimulationNames,
 )
 
@@ -309,6 +310,20 @@ def _call_yuma(
         B_state[:, case.reset_bonds_index] = 0.0
 
     if yuma_version == simulation_names.YUMA2:
+        result = YumaSubtensor(
+            W,
+            S,
+            B_old=B_state,
+            C_old=C_state,
+            config=yuma_config,
+            num_servers=len(case.servers),
+            num_validators=len(case.validators),
+            use_full_matrices=case.use_full_matrices
+        )
+        B_state = result["validator_ema_bond"]
+        C_state = result["server_consensus_weight"]
+
+    elif yuma_version == simulation_names.YUMA2A:
         result = Yuma(
             W,
             S,
@@ -363,7 +378,7 @@ def _call_yuma(
         C_state = result["server_consensus_weight"]
 
     elif yuma_version in [simulation_names.YUMA1]:
-        result = YumaRust(
+        result = YumaSubtensorOld(
             W,
             S,
             B_old=B_state,
