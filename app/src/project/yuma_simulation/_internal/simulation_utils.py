@@ -323,6 +323,20 @@ def _call_yuma(
         B_state = result["validator_ema_bond"]
         C_state = result["server_consensus_weight"]
 
+    elif yuma_version == simulation_names.YUMA2A:
+        result = Yuma(
+            W,
+            S,
+            B_old=B_state,
+            C_old=C_state,
+            config=yuma_config,
+            num_servers=len(case.servers),
+            num_validators=len(case.validators),
+            use_full_matrices=case.use_full_matrices
+        )
+        B_state = result["validator_ema_bond"]
+        C_state = result["server_consensus_weight"]
+
     elif yuma_version == simulation_names.YUMA2B:
         result = Yuma2b(
             W=W,

@@ -85,6 +85,7 @@ class YumaConfig:
 class YumaSimulationNames:
     YUMA1: str = "Yuma 1 (legacy yuma)"
     YUMA2: str = "Yuma 2 (subtensor)"
+    YUMA2A: str = "Yuma 2A (paper)"
     YUMA2B: str = "Yuma 2B (Adrian-Fish)"
     YUMA2C: str = "Yuma 2C (Rhef+reset)"
     YUMA3: str = "Yuma 3 (Rhef+relative bonds)"
@@ -418,10 +419,6 @@ def Yuma(
         B_ema = alpha * B + (1 - alpha) * B_old
     else:
         B_ema = B.clone()
-
-    B_ema_sum = B_ema.sum(dim=0)
-    B_ema = B_ema / (B_ema_sum + 1e-6)
-    B_ema = torch.nan_to_num(B_ema)
 
     # === Dividend ===
     D = (B_ema * I).sum(dim=1)
