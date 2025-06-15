@@ -83,7 +83,7 @@ class YumaConfig:
 
 @dataclass(frozen=True)
 class YumaSimulationNames:
-    YUMA1: str = "Yuma 1"
+    YUMA1: str = "Yuma 1 (legacy yuma)"
     YUMA2: str = "Yuma 2 (subtensor)"
     YUMA2B: str = "Yuma 2B (Adrian-Fish)"
     YUMA2C: str = "Yuma 2C (Rhef+reset)"
@@ -166,7 +166,7 @@ def YumaSubtensorOld(
     config: YumaConfig = YumaConfig(),
 ) -> dict[str, torch.Tensor | str | float]:
     """
-    Currently implemented Subtensor Yuma function.
+    Legacy Subtensor Yuma function.
     """
 
     # === Weight ===
@@ -251,6 +251,7 @@ def YumaSubtensorOld(
         "alpha_b": b,
     }
 
+
 def YumaSubtensor(
     W: torch.Tensor,
     S: torch.Tensor,
@@ -286,34 +287,38 @@ def YumaSubtensor(
     R = (S.view(-1, 1) * W_clipped).sum(dim=0)
 
     # === Incentive ===
-    I = (R / R.sum()).nan_to_num(0)
+    I = compute_incentive(R, config)
 
     # === Trusts ===
     T = (R / P).nan_to_num(0)
     T_v = W_clipped.sum(dim=1) / W.sum(dim=1)
 
     # === Bonds ===
-    B = S.view(-1, 1) * W_clipped
+    W_b = (1 - config.bond_penalty) * W + config.bond_penalty * W_clipped
+    B = S.view(-1, 1) * W_b
     B_sum = B.sum(dim=0)
     B = B / (B_sum + 1e-6)
     B = torch.nan_to_num(B)
 
-    a = b = None
-    bond_alpha = 1 - config.bond_moving_avg
-    if config.liquid_alpha:
-        consensus_high = config.override_consensus_high if config.override_consensus_high is not None else C.quantile(0.75)
-        consensus_low = config.override_consensus_low if config.override_consensus_low is not None else C.quantile(0.25)
-
-        if consensus_high == consensus_low:
-            consensus_high = C.quantile(0.99)
-
-        a = (math.log(1 / config.alpha_high - 1) - math.log(1 / config.alpha_low - 1)) / (consensus_low - consensus_high)
-        b = math.log(1 / config.alpha_low - 1) + a * consensus_low
-        alpha = 1 / (1 + math.e ** (-a * C + b))  # alpha to the old weight
-        bond_alpha = 1 - torch.clamp(alpha, config.alpha_low, config.alpha_high)
-
+    a = b = torch.tensor(float("nan"))
+    alpha = 1 - config.bond_moving_avg
+    if config.liquid_alpha and (C_old is not None):
+        from .simulation_utils import _compute_liquid_alpha
+        alpha = _compute_liquid_alpha(
+            W=W,
+            B=B_old,
+            C=C,
+            alpha_sigmoid_steepness=config.alpha_sigmoid_steepness,
+            alpha_low=config.alpha_low,
+            alpha_high=config.alpha_high,
+            num_validators=num_validators,
+            num_servers=num_servers,
+            use_full_matrices=use_full_matrices,
+        )
     if B_old is not None:
-        B_ema = bond_alpha * B + (1 - bond_alpha) * B_old
+        B_old_sum = B_old.sum(dim=0)
+        B_old = B_old/(B_old_sum + 1e-6)
+        B_ema = alpha * B + (1 - alpha) * B_old
     else:
         B_ema = B.clone()
 
@@ -339,7 +344,7 @@ def YumaSubtensor(
         "validator_ema_bond": B_ema,
         "validator_reward": D,
         "validator_reward_normalized": D_normalized,
-        "bond_alpha": bond_alpha,
+        "bond_alpha": alpha,
         "alpha_a": a,
         "alpha_b": b
     }
@@ -415,8 +420,8 @@ def Yuma(
         B_ema = B.clone()
 
     B_ema_sum = B_ema.sum(dim=0)
-    B_ema = B_ema / (B_ema_sum + 1e-6)  # changed: added epsilon for numerical stability
-    B_ema = torch.nan_to_num(B_ema)     # changed: clean up NaNs after normalization
+    B_ema = B_ema / (B_ema_sum + 1e-6)
+    B_ema = torch.nan_to_num(B_ema)
 
     # === Dividend ===
     D = (B_ema * I).sum(dim=1)
