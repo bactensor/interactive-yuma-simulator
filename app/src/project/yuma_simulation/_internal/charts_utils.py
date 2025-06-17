@@ -103,32 +103,166 @@ def _calculate_total_dividends_with_frames(
     return frames_values, total_value
 
 
+# def _plot_dividends(
+#     num_epochs: int,
+#     validators: list[str],
+#     dividends_per_validator: dict[str, list[float]],
+#     case_name: str,
+#     case: BaseCase,
+#     epochs_padding: int = 0,               # ADDED: allow dropping initial epochs
+#     to_base64: bool = False,
+# ) -> str | None:
+#     """
+#     Generates a plot of dividends over epochs for a set of validators.
+#     """
+
+#     plt.close("all")
+
+#     plot_epochs = num_epochs - epochs_padding
+#     if plot_epochs <= 0 or not dividends_per_validator:
+#         logger.warning("Nothing to plot (padding ≥ epochs or empty data).")
+#         return None
+    
+#     fig, ax_main = plt.subplots(figsize=(14, 6))
+
+#     top_vals = getattr(case, "requested_validators", [])
+#     if top_vals:
+#         plot_validator_names = top_vals.copy()
+#     else:
+#         plot_validator_names = validators.copy()
+
+#     if case.base_validator not in plot_validator_names:
+#         plot_validator_names.append(case.base_validator)
+
+#     validator_styles = _get_validator_styles(validators)
+
+#     total_dividends, percentage_diff_vs_base = _calculate_total_dividends(
+#         validators,
+#         dividends_per_validator,
+#         case.base_validator,
+#         num_epochs,
+#     )
+
+#     num_epochs_calculated: int | None = None
+#     x: np.ndarray = np.array([])
+
+#     for idx, validator in enumerate(plot_validator_names):
+#         if validator not in dividends_per_validator:
+#             continue
+
+#         dividends = dividends_per_validator[validator]
+#         dividends_array = np.array(dividends, dtype=float)
+
+#         if num_epochs_calculated is None:
+#             num_epochs_calculated = len(dividends_array)
+#             x = np.arange(num_epochs_calculated)
+
+#         delta = 0.05
+#         x_shifted = x + idx * delta
+
+#         linestyle, marker, markersize, markeredgewidth = validator_styles.get(
+#             validator, ("-", "o", 5, 1)
+#         )
+
+#         total_dividend = total_dividends.get(validator, 0.0)
+#         percentage_diff = percentage_diff_vs_base.get(validator, 0.0)
+
+#         if abs(total_dividend) < 1e-6:
+#             total_dividend_str = f"{total_dividend:.3e}"  # Scientific notation
+#         else:
+#             total_dividend_str = f"{total_dividend:.6f}"  # Standard float
+
+#         if abs(percentage_diff) < 1e-12:
+#             percentage_str = "(Base)"
+#         elif percentage_diff > 0:
+#             percentage_str = f"(+{percentage_diff:.1f}%)"
+#         else:
+#             percentage_str = f"({percentage_diff:.1f}%)"
+
+#         label = f"{validator}: Total={total_dividend_str} {percentage_str}"
+
+#         ax_main.plot(
+#             x_shifted,
+#             dividends_array[:num_epochs],  # restrict to requested epochs
+#             marker=marker,
+#             markeredgewidth=markeredgewidth,
+#             markersize=markersize,
+#             label=label,
+#             alpha=0.7,
+#             linestyle=linestyle,
+#         )
+
+#     if num_epochs_calculated is not None:
+#         _set_default_xticks(ax_main, num_epochs_calculated)
+
+#     ax_main.set_xlabel("Time (Epochs)")
+#     ax_main.set_ylim(bottom=0)
+#     ax_main.set_ylabel("Dividend per 1,000 Tao per Epoch")
+#     ax_main.set_title(case_name)
+#     ax_main.grid(True)
+#     ax_main.legend()
+
+#     from matplotlib.ticker import ScalarFormatter
+#     ax_main.get_yaxis().set_major_formatter(ScalarFormatter(useMathText=True))
+#     ax_main.ticklabel_format(style="sci", axis="y", scilimits=(-3, 3))
+
+#     if case_name.startswith("Case 4"):
+#         ax_main.set_ylim(0, 0.042)
+
+#     plt.subplots_adjust(hspace=0.3)
+
+#     if to_base64:
+#         return _plot_to_base64(fig)
+#     else:
+#         plt.show()
+#         plt.close(fig)
+#         return None
+
+
 def _plot_dividends(
     num_epochs: int,
     validators: list[str],
     dividends_per_validator: dict[str, list[float]],
     case_name: str,
     case: BaseCase,
+    epochs_padding: int = 0,               # ADDED: allow dropping initial epochs
     to_base64: bool = False,
 ) -> str | None:
     """
     Generates a plot of dividends over epochs for a set of validators.
-    """
 
+    Parameters:
+        num_epochs: number of epochs to display
+        validators: list of all validator IDs
+        dividends_per_validator: mapping from validator ID to list of per-epoch dividends
+        case_name: title for the plot
+        case: BaseCase instance (contains requested_validators and base_validator)
+        epochs_padding: number of initial epochs to skip in the plot
+        to_base64: if True, return the figure as a base64 string; otherwise display it
+    """
     plt.close("all")
+
+    # ADDED: compute effective epochs after padding
+    plot_epochs = num_epochs - epochs_padding
+    if plot_epochs <= 0 or not dividends_per_validator:
+        logger.warning("Nothing to plot (padding ≥ epochs or empty data).")
+        return None
+
     fig, ax_main = plt.subplots(figsize=(14, 6))
 
+    # Determine which validators to plot
     top_vals = getattr(case, "requested_validators", [])
     if top_vals:
         plot_validator_names = top_vals.copy()
     else:
         plot_validator_names = validators.copy()
-
     if case.base_validator not in plot_validator_names:
         plot_validator_names.append(case.base_validator)
 
+    # Get styles
     validator_styles = _get_validator_styles(validators)
 
+    # Pre-compute totals and percentages
     total_dividends, percentage_diff_vs_base = _calculate_total_dividends(
         validators,
         dividends_per_validator,
@@ -136,8 +270,8 @@ def _plot_dividends(
         num_epochs,
     )
 
-    num_epochs_calculated: int | None = None
-    x: np.ndarray = np.array([])
+    # CHANGED: set x based on plot_epochs instead of num_epochs_calculated
+    x = np.arange(plot_epochs)
 
     for idx, validator in enumerate(plot_validator_names):
         if validator not in dividends_per_validator:
@@ -146,9 +280,12 @@ def _plot_dividends(
         dividends = dividends_per_validator[validator]
         dividends_array = np.array(dividends, dtype=float)
 
-        if num_epochs_calculated is None:
-            num_epochs_calculated = len(dividends_array)
-            x = np.arange(num_epochs_calculated)
+        # ADDED: skip if series shorter than padding
+        if len(dividends_array) <= epochs_padding:
+            continue
+
+        # ADDED: trim off the first `epochs_padding` epochs and restrict to `plot_epochs`
+        trimmed = dividends_array[epochs_padding : epochs_padding + plot_epochs]
 
         delta = 0.05
         x_shifted = x + idx * delta
@@ -160,10 +297,11 @@ def _plot_dividends(
         total_dividend = total_dividends.get(validator, 0.0)
         percentage_diff = percentage_diff_vs_base.get(validator, 0.0)
 
+        # Format labels (unchanged)
         if abs(total_dividend) < 1e-6:
-            total_dividend_str = f"{total_dividend:.3e}"  # Scientific notation
+            total_dividend_str = f"{total_dividend:.3e}"
         else:
-            total_dividend_str = f"{total_dividend:.6f}"  # Standard float
+            total_dividend_str = f"{total_dividend:.6f}"
 
         if abs(percentage_diff) < 1e-12:
             percentage_str = "(Base)"
@@ -176,7 +314,7 @@ def _plot_dividends(
 
         ax_main.plot(
             x_shifted,
-            dividends_array[:num_epochs],  # restrict to requested epochs
+            trimmed,                     # CHANGED: plot trimmed data, not full series
             marker=marker,
             markeredgewidth=markeredgewidth,
             markersize=markersize,
@@ -185,8 +323,8 @@ def _plot_dividends(
             linestyle=linestyle,
         )
 
-    if num_epochs_calculated is not None:
-        _set_default_xticks(ax_main, num_epochs_calculated)
+    # CHANGED: use plot_epochs when setting xticks
+    _set_default_xticks(ax_main, plot_epochs)
 
     ax_main.set_xlabel("Time (Epochs)")
     ax_main.set_ylim(bottom=0)
@@ -200,7 +338,7 @@ def _plot_dividends(
     ax_main.ticklabel_format(style="sci", axis="y", scilimits=(-3, 3))
 
     if case_name.startswith("Case 4"):
-        ax_main.set_ylim(0, 0.042)
+        ax_main.set_ylim(0, 0.042)     # unchanged case-specific y-limit
 
     plt.subplots_adjust(hspace=0.3)
 
@@ -210,6 +348,7 @@ def _plot_dividends(
         plt.show()
         plt.close(fig)
         return None
+
 
 
 def _plot_relative_dividends(
