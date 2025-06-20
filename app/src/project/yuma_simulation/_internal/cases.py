@@ -114,9 +114,8 @@ class MetagraphCase(BaseCase):
 
     # These will store per-epoch filtering information.
     valid_indices_epochs: list[list[int]] = field(default_factory=list, init=False)
-    miner_indices_epochs: list[list[int]] = field(default_factory=list, init=False)
     validators_epochs: list[list[str]] = field(default_factory=list, init=False)
-    servers: list[list[str]] = field(default_factory=list, init=False)
+    miners_epochs: list[list[str]] = field(default_factory=list, init=False)
 
     hotkey_label_map: dict[str, str] = field(default_factory=dict, init=False)
     selected_servers: list[str] = field(default_factory=list, init=False)
@@ -140,30 +139,15 @@ class MetagraphCase(BaseCase):
         if self.introduce_shift:
             self.name += " - shifted"
 
-        # For each metagraph (epoch), compute the validators and miner indices.
         for idx, meta in enumerate(self.metas):
-            stakes_tensor = meta["S"]  # shape [n_validators]
-            mask = stakes_tensor >= 1000
+            epoch_hotkeys = meta["hotkeys"]
+            validators_for_epoch = [hk for hk in self.requested_validators if hk in epoch_hotkeys]
+            if not validators_for_epoch:
+                raise ValueError(f"No requested validators in epoch {idx}.")
 
-            valid_indices = mask.nonzero(as_tuple=True)[0].tolist()
-
-            n = stakes_tensor.size(0)
-            miner_indices = list(range(n))
-
-            if not valid_indices:
-                raise ValueError(f"No validators have S >= 1000 in metagraph (epoch) {idx}.")
-
-            self.valid_indices_epochs.append(valid_indices)
-            self.miner_indices_epochs.append(miner_indices)
-            # Get the list of validator and miners hotkeys for this epoch.
-            try:
-                validators_for_epoch = [meta["hotkeys"][uid] for uid in valid_indices]
-                miners_for_epoch = [meta["hotkeys"][uid] for uid in miner_indices]
-            except (KeyError, IndexError) as e:
-                raise ValueError(f"Error retrieving hotkeys for epoch {idx}: {e}")
 
             self.validators_epochs.append(validators_for_epoch)
-            self.servers.append(miners_for_epoch)
+            self.miners_epochs.append(epoch_hotkeys)
 
         #TODO (somehow refactor to not rely on base case post init logic just to satisfy it)
         if not self.base_validator:
@@ -261,78 +245,58 @@ class MetagraphCase(BaseCase):
     @property
     def weights_epochs(self) -> list[torch.Tensor]:
         """
-        Return a list of weight matrices (one per epoch) that have been filtered according
-        to that epoch's valid (validators) and miner indices. If introduce_shift is enabled,
-        then for each epoch (where possible) the row corresponding to shift_validator_id is
-        replaced by the corresponding row values from the subsequent epoch, but only for
-        miner columns that are common between the two epochs.
+        Return per-epoch weight matrices: rows for requested validators, columns for miners.
         """
         Ws = []
         for i, meta in enumerate(self.metas):
             W_full = meta["W"]
-            valid_indices = self.valid_indices_epochs[i]
-            miner_indices = self.miner_indices_epochs[i]
-            # Filter rows (validators) and columns (miners)
-            W_valid = W_full[valid_indices, :][:, miner_indices]
-            Ws.append(W_valid)
+            epoch_hotkeys = meta["hotkeys"]
+            # Map validators to row indices
+            validator_rows = [epoch_hotkeys.index(hk) for hk in self.validators_epochs[i]]
+            # All miners = full hotkey list, columns indices
+            miner_cols = list(range(len(epoch_hotkeys)))
+            Ws.append(W_full[validator_rows][:, miner_cols])
 
         if not self.introduce_shift:
             return Ws
 
         # Apply shifting across epochs.
         for e in range(len(Ws) - 1):
-            valid_indices_current = self.valid_indices_epochs[e]
-            valid_indices_next = self.valid_indices_epochs[e + 1]
-
-            if (self.shift_validator_id in valid_indices_current and
-                    self.shift_validator_id in valid_indices_next):
-                row_current = valid_indices_current.index(self.shift_validator_id)
-                row_next = valid_indices_next.index(self.shift_validator_id)
-
-                miner_indices_current = self.miner_indices_epochs[e]
-                miner_indices_next = self.miner_indices_epochs[e + 1]
-
-                common_miners = set(miner_indices_current).intersection(miner_indices_next)
-                for miner in common_miners:
-                    col_current = miner_indices_current.index(miner)
-                    col_next = miner_indices_next.index(miner)
-                    Ws[e][row_current, col_current] = Ws[e + 1][row_next, col_next]
+            hk = self.shift_validator_hotkey
+            curr_hks = self.metas[e]["hotkeys"]
+            next_hks = self.metas[e + 1]["hotkeys"]
+            if hk in curr_hks and hk in next_hks:
+                r_curr = curr_hks.index(hk)
+                r_next = next_hks.index(hk)
+                common_miners = set(range(len(curr_hks))).intersection(range(len(next_hks)))
+                for m in common_miners:
+                    Ws[e][r_curr, m] = Ws[e + 1][r_next, m]
         return Ws
 
     @property
     def stakes_epochs(self) -> list[torch.Tensor]:
         """
-        Return a list of stakes tensors (one per epoch) filtered to include only the valid
-        validators as determined for each epoch.
+        Return per-epoch stake vectors: entries for requested validators.
         """
         Ss = []
         for i, meta in enumerate(self.metas):
             S_full = meta["S"]
-            valid_indices = self.valid_indices_epochs[i]
-            S_valid = S_full[valid_indices]
-            Ss.append(S_valid)
+            epoch_hotkeys = meta["hotkeys"]
+            validator_idxs = [epoch_hotkeys.index(hk) for hk in self.validators_epochs[i]]
+            Ss.append(S_full[validator_idxs])
         return Ss
 
     @property
     def stakes_dataframe(self) -> pd.DataFrame:
         """
-        Convert the per-epoch stakes (torch.Tensors) into a DataFrame.
-        Each row corresponds to an epoch and each column to a validator hotkey.
-        Stakes for each epoch are normalized so that they sum to 1.
-        Missing values (when a validator is not present in an epoch) will be NaN.
+        Convert per-epoch stakes into a normalized DataFrame with validator columns.
         """
-        stakes_dict_list = []
-        for epoch, stakes_tensor in enumerate(self.stakes_epochs):
-            validators = self.validators_epochs[epoch]
-            stakes_list = stakes_tensor.tolist()
-            stakes_dict = {validator: stake for validator, stake in zip(validators, stakes_list)}
-            stakes_dict_list.append(stakes_dict)
-
-        df_stakes = pd.DataFrame(stakes_dict_list)
-        df_stakes.index.name = "epoch"
-        df_stakes = df_stakes.div(df_stakes.sum(axis=1), axis=0)
-        return df_stakes
-
+        data = []
+        for epoch, S in enumerate(self.stakes_epochs):
+            data.append({hk: stake for hk, stake in zip(self.validators_epochs[epoch], S.tolist())})
+        df = pd.DataFrame(data)
+        df.index.name = "epoch"
+        return df.div(df.sum(axis=1), axis=0)
 
 def create_case(case_name: str, **kwargs) -> BaseCase:
     if case_name not in class_registry:

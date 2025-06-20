@@ -296,7 +296,7 @@ def YumaSubtensor(
 
     # === Bonds ===
     W_b = (1 - config.bond_penalty) * W + config.bond_penalty * W_clipped
-    B = S.view(-1, 1) * W_b
+    B = S.view(-1, 1) * W_b # reshapes S to column vector
     B_sum = B.sum(dim=0)
     B = B / (B_sum + 1e-6)
     B = torch.nan_to_num(B)

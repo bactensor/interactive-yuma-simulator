@@ -676,7 +676,7 @@ def _plot_bonds_metagraph_dynamic(
         return None
 
     validators_epochs = case.validators_epochs
-    miners_epochs     = case.servers
+    miners_epochs     = case.miners_epochs
     selected_validators = case.requested_validators
 
     bonds_data = _prepare_bond_data_dynamic(
@@ -1073,7 +1073,7 @@ def _plot_validator_server_weights_subplots_dynamic(
 
     weights_epochs = case.weights_epochs
     validators_epochs = case.validators_epochs
-    servers_epochs    = case.servers
+    servers_epochs    = case.miners_epochs
 
     data_cube: list[list[list[float]]] = []
     for srv in subset_srvs:
