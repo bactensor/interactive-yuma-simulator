@@ -4,6 +4,7 @@ from IPython.display import HTML
 
 from project.yuma_simulation._internal.cases import BaseCase
 from project.yuma_simulation._internal.charts_utils import (
+    _plot_dividends,
     _plot_relative_dividends,
     _plot_relative_dividends_comparisson,
     _generate_chart_for_type,
@@ -114,16 +115,18 @@ def generate_metagraph_based_chart_table(
 
     # Cache simulation outputs for all summary_versions
     rel_divs_by_version: dict[str, dict[str, list[float]]] = {}
+    divs_by_version: dict[str, list[torch.Tensor]] = {}
     bonds_by_version: dict[str, list[torch.Tensor]] = {}
     incentives_by_version: dict[str, list[torch.Tensor]] = {}
     for version, params in summary_versions:
         config = YumaConfig(simulation=yuma_hyperparameters, yuma_params=params)
-        _, rel_divs, bonds, incentives = _run_dynamic_simulation(
+        divs, rel_divs, bonds, incentives = _run_dynamic_simulation(
             case=normal_case,
             yuma_version=version,
             yuma_config=config,
         )
         rel_divs_by_version[version] = rel_divs
+        divs_by_version[version] = divs
         bonds_by_version[version] = bonds
         incentives_by_version[version] = incentives
 
@@ -137,10 +140,11 @@ def generate_metagraph_based_chart_table(
         
         if version in rel_divs_by_version:
             rel_divs = rel_divs_by_version[version]
+            divs = divs_by_version[version]
             bonds    = bonds_by_version[version]
             incentives = incentives_by_version[version]
         else:
-            _, rel_divs, bonds, incentives = _run_dynamic_simulation(
+            divs, rel_divs, bonds, incentives = _run_dynamic_simulation(
                 case         = normal_case,
                 yuma_version = version,
                 yuma_config  = config,
@@ -148,6 +152,15 @@ def generate_metagraph_based_chart_table(
         deafult_miners = _pick_default_miners(incentives)
         chart_rel = _plot_relative_dividends(
             validators_relative_dividends=rel_divs,
+            case_name=final_name,
+            case=normal_case,
+            num_epochs=normal_case.num_epochs,
+            epochs_padding=epochs_padding,
+            to_base64=True,
+        )
+        chart_divs = _plot_dividends(
+            dividends_per_validator=divs,
+            validators=normal_case.validators,
             case_name=final_name,
             case=normal_case,
             num_epochs=normal_case.num_epochs,
@@ -177,7 +190,7 @@ def generate_metagraph_based_chart_table(
             normalize=True,
             epochs_padding=epochs_padding,
         )
-        table_data[version].extend([chart_rel, chart_weights, chart_bonds, chart_bonds_norm])
+        table_data[version].extend([chart_rel, chart_divs, chart_weights, chart_bonds, chart_bonds_norm])
 
     summary_html = _generate_relative_dividends_summary_html(
         relative_dividends_by_version={v: rel_divs_by_version[v] for v, _ in summary_versions},

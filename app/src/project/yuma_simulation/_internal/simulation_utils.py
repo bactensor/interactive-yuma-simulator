@@ -145,9 +145,10 @@ def _run_dynamic_simulation(
     for epoch in range(case.num_epochs):
         W: torch.Tensor = weights_epochs[epoch]
         S: torch.Tensor = stakes_epochs[epoch]
-        current_validators: list[str] = case.validators_epochs[epoch]
-        current_miner_indices: list[int] = case.miner_indices_epochs[epoch]
 
+        current_validators: list[str] = case.validators_epochs[epoch]
+        # keep the current_miner_indices logic which is used on bond/consensus alignments in case more dynamic calculations are ever needed in future
+        current_miner_indices: list[int] = list(range(256))
         current_validator_count = len(current_validators)
         current_miner_count = len(current_miner_indices)
 
@@ -229,15 +230,15 @@ def _run_dynamic_simulation(
             )
 
         bonds_per_epoch.append(b)
+        S_norm = S / S.sum()
 
         dividends_this_epoch = _compute_dividends_for_epoch(
             D_normalized=D_normalized,
-            S=S,
+            S=S_norm,
             yuma_config=yuma_config,
             validators_list=current_validators,
         )
 
-        S_norm = S / S.sum()
         relative_dividends_this_epoch: dict[str, float] = {}
         for i, validator in enumerate(current_validators):
             relative_dividends_this_epoch[validator] = D_normalized[i].item() - S_norm[i].item()
@@ -415,14 +416,14 @@ def _compute_dividend_for_validator(
     i: int,
     S: torch.Tensor,
     D_normalized: torch.Tensor,
-    yuma_config: YumaConfig
+    yuma_config: YumaConfig,
 ) -> float:
     """
     Computes the dividend per 1000 tao for the validator at index `i`.
     """
     # Calculate the stakes in tao and convert to stake units (per 1000 tao)
-    stakes_tao = S * yuma_config.total_subnet_stake
-    stakes_units = stakes_tao / 1000.0
+    S = S * yuma_config.total_subnet_stake
+    stakes_units = S / 1000.0
 
     # Compute the emission for each validator
     emission_ratio = yuma_config.validator_emission_ratio
@@ -432,7 +433,6 @@ def _compute_dividend_for_validator(
     # Retrieve values as Python floats
     stake_unit = float(stakes_units[i].item())
     emission_val = float(validator_emission[i].item())
-
     return emission_val / stake_unit if stake_unit > 1e-6 else 0.0
 
 def _update_validators_dividends(
