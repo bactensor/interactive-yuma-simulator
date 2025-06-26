@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import traceback
 from dataclasses import asdict
 from datetime import datetime, timedelta
 from functools import lru_cache
@@ -161,7 +162,9 @@ def simulate_single_case_view(request):
             engine='plotly' if js_charts else 'matplotlib',
         )
     except Exception as e:
-        return HttpResponse(f"Error generating chart: {str(e)}", status=500)
+        traceback.print_exc()
+        logger.exception("Error generating chart for case %r", case_name)
+        return HttpResponse(f"Error generating chart: {e}", status=500)
 
     return HttpResponse(partial_html.data if partial_html else "No data", status=200)
 
