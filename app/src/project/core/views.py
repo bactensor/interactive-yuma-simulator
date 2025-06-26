@@ -85,11 +85,13 @@ def simulation_view(request):
                 {
                     "selected_yuma_key": yuma_key,
                     "chosen_yuma": chosen_yuma,
+                    "shifted_validator_hotkey": cleaned["shifted_validator_hotkey"],
                     "sim_params": sim_params,
                     "yuma_params": yuma_params,
                 }
             )
             context["cache_key"] = settings.CACHE_KEY
+            context["jsCharts"] = request.GET.get('jsCharts', 'off')
 
     return render(request, "simulator.html", context)
 
@@ -120,6 +122,7 @@ def simulate_single_case_view(request):
         decay_rate = float(request.GET.get("decay_rate", 0.1))
         capacity_alpha = float(request.GET.get("capacity_alpha", 0.1))
         alpha_sigmoid_steepness = float(request.GET.get("alpha_sigmoid_steepness", 10.0))
+        js_charts = request.GET.get('jsCharts', '') == 'on'
 
     except ValueError as e:
         return HttpResponse(f"Invalid parameter: {str(e)}", status=400)
@@ -152,7 +155,10 @@ def simulate_single_case_view(request):
     try:
         selected_yumas = [(chosen_yuma, yuma_params)]
         partial_html = generate_chart_table(
-            cases=[chosen_case], yuma_versions=selected_yumas, yuma_hyperparameters=sim_params
+            cases=[chosen_case],
+            yuma_versions=selected_yumas,
+            yuma_hyperparameters=sim_params,
+            engine='plotly' if js_charts else 'matplotlib',
         )
     except Exception as e:
         return HttpResponse(f"Error generating chart: {str(e)}", status=500)
@@ -180,20 +186,20 @@ def metagraph_simulation_view(request):
 
         raw_start = request.GET.get("start_date")
         raw_end   = request.GET.get("end_date")
+        js_charts = request.GET.get('jsCharts', '') == 'on'
+        shifted_validator_hotkey = request.GET.get('shifted_validator_hotkey', '')
 
         try:
             start_date = datetime.fromisoformat(raw_start) if raw_start else None
             end_date   = datetime.fromisoformat(raw_end)   if raw_end   else None
         except ValueError:
             return HttpResponseBadRequest("Dates must be in YYYY-MM-DD format.")
-        
         netuid = int(request.GET.get("netuid", 0))
         requested_miners = [m.strip()
                     for m in request.GET.getlist("miners_hotkeys")
                     if m.strip()]
 
         raw_alpha_tao = float(request.GET.get("alpha_tao_ratio", 0.1))
-        
     except ValueError as e:
         return HttpResponse(f"Invalid parameter: {e}", status=400)
 
@@ -216,12 +222,11 @@ def metagraph_simulation_view(request):
 
     if chosen_yuma.startswith("YUMA3"):
         mg_yuma_kwargs["liquid_alpha_effective_weights"] = effective_weights
-    
+
     yuma_params = YumaParams(**mg_yuma_kwargs)
 
     epochs_padding = int(settings.EPOCHS_PADDING)
     start_date = start_date - timedelta(seconds=360 * 12 * epochs_padding)
-
     try:
         mg_data = fetch_metagraph_data(
             start_date=start_date,
@@ -250,15 +255,21 @@ def metagraph_simulation_view(request):
     except Exception as e:
         return HttpResponse(f"Error fetching metagraph data: {e}", status=400)
 
+    case_config = {}
+    if shifted_validator_hotkey:
+        case_config.update({
+            'introduce_shift': True,
+            'shift_validator_hotkey': shifted_validator_hotkey,
+        })
     try:
         case, invalid_miners = MetagraphCase.from_mg_dumper_data(
             mg_data=mg_data,
             requested_miners=requested_miners,
+            **case_config,
             )
     except ValueError as e:
         return HttpResponse(str(e), status=400)
 
-    
     selection_form = SelectionForm(request.GET or None)
     for hotkey in invalid_miners:
         selection_form.add_error(
@@ -280,6 +291,7 @@ def metagraph_simulation_view(request):
         normal_case=case,
         yuma_hyperparameters=sim_params,
         epochs_padding=epochs_padding,
+        engine='plotly' if js_charts else 'matplotlib',
     )
 
     return JsonResponse(
@@ -319,16 +331,23 @@ def bootstrap_generate_ipynb_table(
             c_idx = 0
 
         case_name = cols[c_idx]
-        raw_img_tag = summary_table.iat[i, c_idx]
-        img_src = parse_img_src(raw_img_tag)
+        raw_html = summary_table.iat[i, c_idx]
+        img_src = parse_img_src(raw_html)
 
-        rows_html.append(f'''
-          <div class="mb-4 text-center">
-            <img src="{img_src}"
-                 class="img-fluid w-100"
-                 alt="Chart for {case_name}">
-          </div>
-        ''')
+        if img_src:
+            rows_html.append(f'''
+              <div class="mb-4 text-center">
+                <img src="{img_src}"
+                     class="img-fluid w-100"
+                     alt="Chart for {case_name}">
+              </div>
+            ''')
+        else:
+            rows_html.append(f'''
+              <div class="mb-4 text-center">
+                {raw_html}
+              </div>
+            ''')
 
     return f'''
     <div class="container-fluid px-3">

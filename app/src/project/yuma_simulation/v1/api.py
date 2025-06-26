@@ -2,7 +2,6 @@ import pandas as pd
 import logging
 from IPython.display import HTML
 
-from project.yuma_simulation._internal import charts_utils_plotly
 from project.yuma_simulation._internal.cases import BaseCase
 from project.yuma_simulation._internal.charts_utils import (
     _plot_relative_dividends,
@@ -38,6 +37,7 @@ def generate_chart_table(
     yuma_hyperparameters: SimulationHyperparameters,
     draggable_table: bool = False,
     chart_types: list[str] | None = None,
+    engine: str = 'matplotlib',
 ) -> HTML:
     """
     Generates an HTML table of charts for a list of cases across different yuma versions.
@@ -75,6 +75,7 @@ def generate_chart_table(
                     final_case_name=final_case_name,
                     simulation_results=simulation_results,
                     to_base64=True,
+                    engine=engine,
                 )
 
             for yuma_version, chart_base64 in chart_row.items():
@@ -100,6 +101,7 @@ def generate_metagraph_based_chart_table(
     epochs_padding: int,
     diff_versions: tuple[str, str] | None = None,
     draggable_table: bool = False,
+    engine: str = 'matplotlib',
 ) -> HTML:
     """
     Generate charts for `chart_versions` and a summary table across `summary_versions`.
@@ -147,30 +149,33 @@ def generate_metagraph_based_chart_table(
                 yuma_config  = config,
             )
         deafult_miners = _pick_default_miners(incentives)
-        chart_rel = charts_utils_plotly._plot_relative_dividends(
+        chart_rel = _plot_relative_dividends(
             validators_relative_dividends=rel_divs,
             case_name=final_name,
             case=normal_case,
             num_epochs=normal_case.num_epochs,
             epochs_padding=epochs_padding,
             to_base64=True,
+            engine=engine,
         )
-        chart_weights = charts_utils_plotly._plot_validator_server_weights_subplots_dynamic(
+        chart_weights = _plot_validator_server_weights_subplots_dynamic(
             case=normal_case,
             default_miners=deafult_miners,
             case_name=final_name,
             to_base64=True,
             epochs_padding=epochs_padding,
+            engine=engine,
         )
-        chart_bonds = charts_utils_plotly._plot_bonds_metagraph_dynamic(
+        chart_bonds = _plot_bonds_metagraph_dynamic(
             case=normal_case,
             bonds_per_epoch=bonds,
             default_miners=deafult_miners,
             case_name=final_name,
             to_base64=True,
             epochs_padding=epochs_padding,
+            engine=engine,
         )
-        chart_bonds_norm = charts_utils_plotly._plot_bonds_metagraph_dynamic(
+        chart_bonds_norm = _plot_bonds_metagraph_dynamic(
             case=normal_case,
             bonds_per_epoch=bonds,
             default_miners=deafult_miners,
@@ -178,6 +183,7 @@ def generate_metagraph_based_chart_table(
             to_base64=True,
             normalize=True,
             epochs_padding=epochs_padding,
+            engine=engine,
         )
         table_data[version].extend([chart_rel, chart_weights, chart_bonds, chart_bonds_norm])
 

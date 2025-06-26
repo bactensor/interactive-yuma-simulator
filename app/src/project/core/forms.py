@@ -89,6 +89,10 @@ class SelectionForm(forms.Form):
             }
         )
     )
+    shifted_validator_hotkey = forms.CharField(
+        required=False,
+        label="Shifted Validator Hotkey",
+    )
 
     liquid_alpha_effective_weights = forms.BooleanField(
         required=False,
