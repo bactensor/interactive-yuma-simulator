@@ -1,13 +1,10 @@
 import torch
 import pandas as pd
 from dataclasses import dataclass, field
-from itertools import chain
 from typing import Any, Optional
 import logging
 from .metagraph_utils import (
     epoch_hotkeys_by_uid,
-    fetch_metagraph_hotkeys,
-    filter_duplicate_validators,
     ordered_stakes_for_uids,
     ordered_weights_for_uids,
 )
@@ -182,10 +179,6 @@ class MetagraphCase(BaseCase):
         hotkeys = mg_data["hotkeys"]
         weights = mg_data["weights"]
         stakes = mg_data["stakes"]
-        weights = {
-            blk: filter_duplicate_validators(blk_weights, uids, stakes[blk], hotkeys)
-            for blk, blk_weights in weights.items()
-        }
 
         epoch_hks = epoch_hotkeys_by_uid(
             hotkeys = hotkeys,
@@ -233,9 +226,6 @@ class MetagraphCase(BaseCase):
             S = ordered_stakes_for_uids(stakes_map, uids)      # list[float], len = len(uids)
             W = ordered_weights_for_uids(weight_map, uids)     # list[list[float]], NxN
             hk = epoch_hks[block]
-            if len(hk) == 0:
-                print(S)
-                print(mg_data["weights"][b])
             metas.append({
                 "S": S,
                 "W": W,

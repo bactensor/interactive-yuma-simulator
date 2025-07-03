@@ -206,45 +206,6 @@ def fetch_metagraph_hotkeys(
                     f"block={block} after {max_retries} attempts."
                 )
 
-
-def filter_duplicate_validators(
-    weight_map: dict[str, dict[str, float]],
-    uids: list[int],
-    stakes: dict[str, float],
-    hotkeys,
-) -> dict[str, dict[str, float]]:
-    """
-    Filters weight_map to keep only one validator per UID.
-    Selection criteria: 1) Most connections, 2) If tied, larger index.
-    """
-    # Group validator indices by their UID
-    uid_to_validator_indices = defaultdict(list)
-    for idx_str in weight_map.keys():
-        idx = int(idx_str)
-        if 0 <= idx < len(uids):
-            uid = uids[idx]
-            uid_to_validator_indices[uid].append(idx)
-
-    # Select best validator for each UID
-    indices_to_keep = set()
-    for uid, validator_indices in uid_to_validator_indices.items():
-        if len(validator_indices) == 1:
-            indices_to_keep.add(validator_indices[0])
-        else:
-            # Find validator with highest stake, then largest index
-            best_idx = max(
-                validator_indices,
-                key=lambda idx: (stakes[str(idx)], idx)
-            )
-            indices_to_keep.add(best_idx)
-
-    # Build filtered weight_map
-    return {
-        idx_str: row
-        for idx_str, row in weight_map.items()
-        if int(idx_str) in indices_to_keep
-    }
-
 def ordered_weights_for_uids(
     weight_map: dict[str, dict[str, float]],
     uids: list[int],
