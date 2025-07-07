@@ -20,6 +20,7 @@
 
 <!-- Latest compiled and minified JavaScript -->
 <script src="https://cdn.jsdelivr.net/npm/bootstrap-select@1.14.0-beta2/dist/js/bootstrap-select.min.js"></script>
+ <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 </head>
 <style>
 
@@ -34,7 +35,7 @@ body {
   width: 100% !important;
   max-width: 100% !important;
   /* if you still want some cap, use max-height: 80vh !important; */
-}  
+}
 
 .scrollable-table-container .table {
   width: 100% !important;
@@ -165,7 +166,6 @@ body {
 
 .case-container .card-body {
   overflow-x: auto;
-  padding-top: 4rem !important; 
   min-height: 400px;
 }
 #chartWrapper.metagraph .case-container {
@@ -174,7 +174,7 @@ body {
 }
 
 /* ----------------------------
-   DESKTOP / LARGE (md+) 
+   DESKTOP / LARGE (md+)
    Sidebar “fixed” + self-scrolling
    ---------------------------- */
 @media (min-width: 768px) {
@@ -271,10 +271,10 @@ body {
   margin-bottom: 2rem !important;
 }
 
-#chartWrapper.metagraph .case-container .card-body {
+/*#chartWrapper.metagraph .case-container .card-body {
   padding-top: 5rem !important;
 }
-
+*/
 .case-container .card-body svg,
 .case-container .card-body img {
   display: block;
@@ -283,9 +283,10 @@ body {
   height: auto;
 }
 
+/*
 .case-container .card-body > div:first-child {
   margin-top: 2rem;
-}
+}*/
 
 .case-container .card-body > div {
   margin-bottom: 2rem;
@@ -390,6 +391,7 @@ form#simulationForm .form-check-inline {
                       {# ─────────── The two hotkey textareas, hidden by default ─────────── #}
                       <div id="advanced_settings" class="ml-4 d-none" style="margin-top: 0.5rem;">
                         {{ selection_form.miners_hotkeys|as_crispy_field }}
+                        {{ selection_form.shifted_validator_hotkey|as_crispy_field }}
                       </div>
 
                     </div>
@@ -440,17 +442,17 @@ form#simulationForm .form-check-inline {
                           const yumaSelect     = document.getElementById('id_selected_yumas');
                           const bondInput      = document.getElementById('id_bond_moving_avg');
                           const specialKeys    = ['YUMA2C'];
-                        
+
                           function updateLiquidVisibility() {
                             const showAlpha = liquidCheckbox.checked;
                             alphaGroup.forEach(el => el.style.display = showAlpha ? 'flex' : 'none');
                             bondInput.classList.toggle('fake-disabled', showAlpha);
                           }
-                        
+
                           function updateYuma() {
                             const val = yumaSelect.value;
                             const isY1 = (val === 'YUMA1');
-                        
+
                             if (specialKeys.includes(val)) {
                               bondFieldset.forEach(el => el.style.display = 'none');
                               alphaGroup.forEach(el => el.style.display = 'none');
@@ -460,7 +462,7 @@ form#simulationForm .form-check-inline {
                               decayGroup.forEach(el => el.style.display = 'none');
                               updateLiquidVisibility();
                             }
-                        
+
                             if (isY1) {
                               bondInput.value    = 0;
                               bondInput.readOnly = true;
@@ -479,10 +481,10 @@ form#simulationForm .form-check-inline {
                               effectiveGroup.forEach(el => el.style.display = 'none');
                             }
                           }
-                        
+
                           liquidCheckbox.addEventListener('change', updateLiquidVisibility);
                           yumaSelect.addEventListener('change', updateYuma);
-                        
+
                           updateYuma();
                         });
                         </script>
@@ -495,13 +497,24 @@ form#simulationForm .form-check-inline {
             </form>
           </div>
           <div class="card-footer bg-light">
-            <!-- full-width generate button -->
-            <button type="submit"
-                    id="generateBtnFooter"
-                    form="simulationForm"
-                    class="btn btn-primary w-100">
-              Generate
-            </button>
+            <div class="d-flex flex-column gap-2">
+              <!-- Switch outside form but linked to it -->
+              <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" role="switch"
+                       id="jsChartsSwitch" name="jsCharts" form="simulationForm">
+                <label class="form-check-label" for="jsChartsSwitch">
+                  JS charts
+                </label>
+              </div>
+
+              <!-- Generate button -->
+              <button type="submit"
+                      id="generateBtnFooter"
+                      form="simulationForm"
+                      class="btn btn-primary w-100">
+                Generate
+              </button>
+            </div>
           </div>
         </div>
       </aside>
@@ -520,12 +533,22 @@ form#simulationForm .form-check-inline {
               <h5 class="mb-0">Charts</h5>
             </div>
 
-            <div class="form-check form-switch">
-              <input class="form-check-input" type="checkbox" role="switch"
-                     id="colSwitch">
-              <label class="form-check-label" for="colSwitch">
-                One column
-              </label>
+            <div class="d-flex align-items-center gap-3">
+              <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" role="switch"
+                       id="descSwitch">
+                <label class="form-check-label" for="descSwitch">
+                  Descriptions
+                </label>
+              </div>
+
+              <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" role="switch"
+                       id="colSwitch">
+                <label class="form-check-label" for="colSwitch">
+                  One column
+                </label>
+              </div>
             </div>
 
           </div>
@@ -548,7 +571,7 @@ form#simulationForm .form-check-inline {
       <script>
         const singleUrl    = "{% url 'simulate_single_case' %}";
         const metagraphUrl = "{% url 'metagraph_simulation' %}";
-      
+
         const useMetagraphEl = document.getElementById('id_use_metagraph');
         const startDateEl = document.getElementById('id_start_date');
         const endDateEl   = document.getElementById('id_end_date');
@@ -558,20 +581,81 @@ form#simulationForm .form-check-inline {
         const selectedCases = JSON.parse('{{ cases_json|escapejs }}');
         const yumasData     = JSON.parse('{{ yumas_json|escapejs }}');
         const cache_key = "{{ cache_key }}";
+        const jsCharts = "{{ jsCharts }}";
 
         const simForm = document.getElementById('simulationForm');
 
-        window.addEventListener("load", () => 
+        window.addEventListener("load", () =>
           validForms && fetchAllCasesParallel()
         );
-      
+
         function parseCaseNumber(caseName) {
           const m = caseName.match(/^Case\s+(\d+)/i);
           return m ? parseInt(m[1],10) : 999999;
         }
-        
+
         async function fetchAllCasesParallel() {
           const chartWrapper = document.getElementById("chartWrapper");
+
+          /**
+           * Tiny helper that yields control to the browser for one frame.
+           * Using rAF keeps the code ~1 frame (≈16 ms) apart;
+           * switch to `setTimeout(resolve, 0)` if you prefer micro-yielding.
+           */
+          const nextTick = () =>
+            new Promise(requestAnimationFrame);
+
+          /**
+           * Execute <script data-chart-render> elements inside `container`
+           * one-by-one, giving the browser time to paint between each.
+           */
+            async function executeScriptsSequential(container) {
+            // Convert static NodeList to real array so we can safely iterate
+            const scripts = Array.from(
+              container.querySelectorAll('script[data-chart-render]')
+            );
+
+            for (const script of scripts) {
+              try {
+                // Clone into a new <script> so it actually executes
+                const newScript = document.createElement('script');
+                // Preserve any module / type attributes if you use them
+                [...script.attributes].forEach(attr =>
+                  newScript.setAttribute(attr.name, attr.value)
+                );
+                newScript.textContent = script.textContent;
+
+                // Run it
+                document.head.appendChild(newScript);
+                document.head.removeChild(newScript);
+              } catch (err) {
+                console.error('Error executing chart script:', err);
+              }
+
+              // Let the UI update before running the next heavy chart render
+              await nextTick();
+            }
+          }
+
+          function observeAllPlotlyCharts(container) {
+            const plots = container.querySelectorAll('.js-plotly-plot');
+
+            plots.forEach(plot => {
+              const parent = plot.closest('.card-body') || plot.parentElement;
+
+              if (!parent) return;
+
+              const ro = new ResizeObserver(() => {
+                try {
+                  Plotly.Plots.resize(plot);
+                } catch (err) {
+                  console.warn('Resize failed for plot:', err);
+                }
+              });
+
+              ro.observe(parent);
+            });
+          }
 
           // toggle metagraph styling
           if (useMetagraphEl.checked) chartWrapper.classList.add("metagraph");
@@ -620,9 +704,11 @@ form#simulationForm .form-check-inline {
             url.searchParams.set("end_date",                  endDateEl.value);
             url.searchParams.set("netuid",                      netuidEl.value);
             url.searchParams.set("_ck",    cache_key);
+            url.searchParams.set("jsCharts",    jsCharts);
             minerLines.forEach(key =>
               url.searchParams.append("miners_hotkeys", key)
             );
+            url.searchParams.set("shifted_validator_hotkey", yumasData.shifted_validator_hotkey);
 
             try {
               const res = await fetch(url);
@@ -639,7 +725,9 @@ form#simulationForm .form-check-inline {
                   <div class="card-header"><strong>Metagraph Simulation</strong></div>
                   <div class="card-body p-3">${payload.html}</div>
                 </div>`;
-
+              updateDescriptionVisibility();
+              await executeScriptsSequential(chartWrapper);
+              observeAllPlotlyCharts(chartWrapper);
               if (payload.errors.miners_hotkeys) {
                 showInvalid("id_miners_hotkeys", payload.errors.miners_hotkeys);
               }
@@ -673,6 +761,7 @@ form#simulationForm .form-check-inline {
               url.searchParams.set("alpha_sigmoid_steepness",     yParams.alpha_sigmoid_steepness);
               url.searchParams.set("liquid_alpha_effective_weights",                 yParams.liquid_alpha_effective_weights);
               url.searchParams.set("_ck",    cache_key);
+              url.searchParams.set("jsCharts",    jsCharts);
 
               return fetch(url)
                 .then(r => { if (!r.ok) throw new Error(r.statusText); return r.text(); })
@@ -691,13 +780,16 @@ form#simulationForm .form-check-inline {
             const results = await Promise.all(promises);
             chartWrapper.innerHTML = "";
             results.forEach(r => chartWrapper.insertAdjacentHTML("beforeend", r.snippet));
+            updateDescriptionVisibility();
+            await executeScriptsSequential(chartWrapper);
+            observeAllPlotlyCharts(chartWrapper);
           }
         }
-      
+
         $(function(){
           $('.selectpicker').selectpicker('destroy').selectpicker({ container: 'body', dropupAuto: false });
         });
-      
+
         document.addEventListener("DOMContentLoaded", () => {
           // column-switch retention
           const switchEl = document.getElementById('colSwitch');
@@ -713,8 +805,54 @@ form#simulationForm .form-check-inline {
             localStorage.setItem(KEY, switchEl.checked);
           });
         });
+
+       document.addEventListener("DOMContentLoaded", () => {
+        const switchEl = document.getElementById('descSwitch');
+        const KEY = 'showDescriptions';
+
+        // Default to showing descriptions (switch on)
+        const shouldShow = localStorage.getItem(KEY) !== 'false';
+        switchEl.checked = shouldShow;
+
+        // Function to apply current state to all descriptions
+        function applyDescriptionVisibility() {
+          const descriptions = document.querySelectorAll('.plotly-chart-html-description');
+          const show = switchEl.checked;
+          descriptions.forEach(desc => {
+            desc.style.display = show ? '' : 'none';
+          });
+        }
+
+        // Apply initial state
+        applyDescriptionVisibility();
+
+        // Handle toggle
+        switchEl.addEventListener('change', () => {
+          applyDescriptionVisibility();
+          localStorage.setItem(KEY, switchEl.checked);
+        });
+
+        // Make function globally available for calling after async operations
+        window.updateDescriptionVisibility = applyDescriptionVisibility;
+      });
+
+      document.addEventListener("DOMContentLoaded", () => {
+        // Your existing switches...
+
+        // Footer switch with localStorage
+        const footerSwitchEl = document.getElementById('jsChartsSwitch');
+        const FOOTER_KEY = 'jsChartsSwitchState';
+
+        const savedState = localStorage.getItem(FOOTER_KEY) !== 'false';
+        footerSwitchEl.checked = savedState;
+
+        // Save state on change
+        footerSwitchEl.addEventListener('change', () => {
+          localStorage.setItem(FOOTER_KEY, footerSwitchEl.checked);
+        });
+      });
       </script>
-      
+
 
 <script>
   const sidebar = document.getElementById('sidebar');
@@ -771,23 +909,23 @@ form#simulationForm .form-check-inline {
       { id: 'id_bond_penalty'    , defaultMax: 65535    },
       { id: 'id_bond_moving_avg' , defaultMax: 1000000  }
     ];
-  
+
     configs.forEach(({id, defaultMax}) => {
       const input = document.getElementById(id);
       const label = document.querySelector(`label[for="${id}"]`);
       if (!input || !label) return;
-  
+
       const MAX = parseFloat(input.max) || defaultMax;
       const scaled = document.createElement('small');
       scaled.id = `${id}_scaled`;
       scaled.className = 'text-muted ms-2';
       label.appendChild(scaled);
-  
+
       function refresh() {
         const v = parseFloat(input.value) || 0;
         scaled.textContent = `(${(v / MAX).toFixed(4)})`;
       }
-  
+
       input.addEventListener('input', refresh);
       refresh();
     });
