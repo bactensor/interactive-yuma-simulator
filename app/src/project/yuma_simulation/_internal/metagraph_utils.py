@@ -9,6 +9,12 @@ import bittensor as bt
 from multiprocessing import Pool
 from .experiment_setup import ExperimentSetup
 from typing import Optional
+from collections import defaultdict
+from typing import Dict, List, Set, Tuple, Union
+
+BlockKey  = Union[int, str]
+NeuronKey = Union[int, str]
+
 
 logger = logging.getLogger(__name__)
 
@@ -336,6 +342,71 @@ def epoch_hotkeys_by_uid(
         result[blk] = hk_by_slot
 
     return result
+
+
+def diagnose_weight_only_neurons(
+    weights: Dict[BlockKey, Dict[NeuronKey, Dict[NeuronKey, float]]],
+    stakes:  Dict[BlockKey, Dict[NeuronKey, float]],
+    *,
+    uids:    List[int] | None = None,
+    hotkeys: List[str] | None = None,
+) -> Dict[int, Set[int]]:
+    """
+    • Returns {block_id: {src_idx, …}} for every source‑neuron index that has
+      weights but no stake row in the same block.
+    • Logs weight‑vs‑stake counts per block and warns if either ≠ 256.
+    """
+    anomalies: Dict[int, Set[int]] = defaultdict(set)
+
+    # ------------------------------------------------------------------- core
+    for block_raw, src_dict in weights.items():
+        try:
+            block_id = int(block_raw)
+        except (TypeError, ValueError):
+            logger.warning("Skipping non‑numeric block key: %s", block_raw)
+            continue
+
+        stake_map = stakes.get(block_raw) or stakes.get(str(block_id)) or {}
+        stake_keys_str = {str(k) for k in stake_map.keys()}
+
+        # ---- weight‑only detection
+        for src_raw in src_dict.keys():
+            try:
+                src_idx = int(src_raw)
+            except (TypeError, ValueError):
+                logger.warning("Skipping non‑numeric neuron key: %s (block %s)", src_raw, block_id)
+                continue
+
+            if str(src_idx) not in stake_keys_str:
+                anomalies[block_id].add(src_idx)
+
+        # ---- count diagnostics
+        w_count = len(src_dict)              # distinct weight sources
+        s_count = len(stake_map)             # stake rows
+
+        if w_count != 256 or s_count != 256:
+            logger.warning(
+                "Block %s: weight sources = %d, stake rows = %d (expected 256 each)",
+                block_id, w_count, s_count
+            )
+        else:
+            logger.info(
+                "Block %s: counts OK (256 sources, 256 stakes)", block_id
+            )
+
+    # ---------------------------------------------------------------- logging
+    if anomalies:
+        logger.warning("Detected weight‑only neurons (missing stakes):")
+        for b, idx_set in sorted(anomalies.items()):
+            logger.warning("  • Block %s:", b)
+            for idx in sorted(idx_set):
+                uid    = uids[idx]    if uids    and 0 <= idx < len(uids)    else "?"
+                hotkey = hotkeys[idx] if hotkeys and 0 <= idx < len(hotkeys) else ""
+                logger.warning("      idx=%-4d  uid=%-6s  %s", idx, uid, hotkey)
+    else:
+        logger.info("No weight‑only neurons found — stakes align with weights.")
+
+    return anomalies
 
 if __name__ == "__main__":
     DownloadMetagraph().run()

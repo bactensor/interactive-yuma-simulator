@@ -5,6 +5,7 @@ from typing import Any, Optional
 import logging
 from .metagraph_utils import (
     epoch_hotkeys_by_uid,
+    diagnose_weight_only_neurons,
     ordered_stakes_for_uids,
     ordered_weights_for_uids,
 )
@@ -179,6 +180,13 @@ class MetagraphCase(BaseCase):
         hotkeys = mg_data["hotkeys"]
         weights = mg_data["weights"]
         stakes = mg_data["stakes"]
+
+        diagnose_weight_only_neurons(
+            weights=weights,
+            hotkeys=hotkeys,
+            uids=uids,
+            stakes=stakes,
+        )
 
         epoch_hks = epoch_hotkeys_by_uid(
             hotkeys = hotkeys,
