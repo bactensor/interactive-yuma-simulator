@@ -177,8 +177,7 @@ class MetagraphCase(BaseCase):
         cls,
         mg_data: Dict[str, Any],
         requested_miners: Optional[List[str]] = None,
-        *,
-        diagnostics: bool | None = None,
+        **kwargs,
     ) -> Tuple["MetagraphCase", List[str], List[str]]:
 
         blocks          = mg_data["blocks"]
@@ -198,8 +197,7 @@ class MetagraphCase(BaseCase):
 
         # choose diagnostics blocks
         diag_blocks = set(random.sample(blocks, min(10, len(blocks))))
-        diagnostics_enabled = diagnostics if diagnostics is not None \
-                            else getattr(settings, "ENABLE_METAGRAPH_DIAGNOSTICS", False)
+        diagnostics_enabled = getattr(settings, "ENABLE_METAGRAPH_DIAGNOSTICS", False)
 
         metas: List[Dict[str, Any]] = []
         for block in blocks:
@@ -219,6 +217,7 @@ class MetagraphCase(BaseCase):
             metas=metas,
             num_epochs=len(metas),
             requested_validators=requested_validators,
+            **kwargs,
         )
         case.hotkey_label_map = mg_data["labels"]
         case.selected_servers = requested_miners or []
@@ -251,10 +250,14 @@ class MetagraphCase(BaseCase):
             valid_indices_current = self.valid_indices_epochs[e]
             valid_indices_next = self.valid_indices_epochs[e + 1]
 
-            if (self.shift_validator_id in valid_indices_current and
-                    self.shift_validator_id in valid_indices_next):
-                row_current = valid_indices_current.index(self.shift_validator_id)
-                row_next = valid_indices_next.index(self.shift_validator_id)
+            # Get the hotkeys for current and next epochs
+            hotkeys_current = [self.metas[e]["hotkeys"][idx] for idx in valid_indices_current]
+            hotkeys_next = [self.metas[e + 1]["hotkeys"][idx] for idx in valid_indices_next]
+
+            if (self.shift_validator_hotkey in hotkeys_current and
+                    self.shift_validator_hotkey in hotkeys_next):
+                row_current = hotkeys_current.index(self.shift_validator_hotkey)
+                row_next = hotkeys_next.index(self.shift_validator_hotkey)
 
                 miner_indices_current = self.miner_indices_epochs[e]
                 miner_indices_next = self.miner_indices_epochs[e + 1]

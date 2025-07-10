@@ -37,6 +37,7 @@ def generate_chart_table(
     yuma_hyperparameters: SimulationHyperparameters,
     draggable_table: bool = False,
     chart_types: list[str] | None = None,
+    engine: str = 'matplotlib',
 ) -> HTML:
     """
     Generates an HTML table of charts for a list of cases across different yuma versions.
@@ -74,6 +75,7 @@ def generate_chart_table(
                     final_case_name=final_case_name,
                     simulation_results=simulation_results,
                     to_base64=True,
+                    engine=engine,
                 )
 
             for yuma_version, chart_base64 in chart_row.items():
@@ -99,6 +101,7 @@ def generate_metagraph_based_chart_table(
     epochs_padding: int,
     diff_versions: tuple[str, str] | None = None,
     draggable_table: bool = False,
+    engine: str = 'matplotlib',
 ) -> HTML:
     """
     Generate charts for `chart_versions` and a summary table across `summary_versions`.
@@ -153,12 +156,15 @@ def generate_metagraph_based_chart_table(
             num_epochs=normal_case.num_epochs,
             epochs_padding=epochs_padding,
             to_base64=True,
+            engine=engine,
         )
         chart_weights = _plot_validator_server_weights_subplots_dynamic(
             case=normal_case,
             default_miners=deafult_miners,
+            case_name=final_name,
             to_base64=True,
             epochs_padding=epochs_padding,
+            engine=engine,
         )
         chart_bonds = _plot_bonds_metagraph_dynamic(
             case=normal_case,
@@ -167,6 +173,7 @@ def generate_metagraph_based_chart_table(
             case_name=final_name,
             to_base64=True,
             epochs_padding=epochs_padding,
+            engine=engine,
         )
         chart_bonds_norm = _plot_bonds_metagraph_dynamic(
             case=normal_case,
@@ -176,6 +183,7 @@ def generate_metagraph_based_chart_table(
             to_base64=True,
             normalize=True,
             epochs_padding=epochs_padding,
+            engine=engine,
         )
         table_data[version].extend([chart_rel, chart_weights, chart_bonds, chart_bonds_norm])
 

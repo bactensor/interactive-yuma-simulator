@@ -397,8 +397,10 @@ def run_block_diagnostics(block: int,
     Logs summary lines; raises nothing.
     """
     try:
-        from bittensor import subtensor     # import lazily
-        meta = subtensor.metagraph(netuid=netuid, block=block, lite=False)
+        st = get_archive_session()
+        meta = st.metagraph(netuid=netuid,
+                            block=block,
+                            lite=False)
     except Exception as e:
         logger.warning("Diag fetch failed for %d: %s", block, e)
         return

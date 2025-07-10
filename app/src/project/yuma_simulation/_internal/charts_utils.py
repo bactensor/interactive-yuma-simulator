@@ -22,38 +22,30 @@ from project.yuma_simulation._internal.cases import BaseCase, MetagraphCase
 from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
 from matplotlib.ticker import FuncFormatter
 
+from project.yuma_simulation._internal.charts_data import _calculate_total_dividends
+from project.yuma_simulation._internal.charts_plotly import (
+    plot_relative_dividends_plotly,
+    plot_bonds_metagraph_dynamic_plotly,
+    plot_validator_server_weights_subplots_dynamic_plotly,
+    plot_validator_server_weights_subplots_plotly,
+    plot_dividends_plotly,
+    plot_bonds_plotly,
+    plot_validator_server_weights_plotly,
+    plot_incentives_plotly,
+)
+from project.yuma_simulation._internal.charts_matplotlib import (
+    _plot_relative_dividends_matplotlib,
+    _plot_bonds_metagraph_dynamic_matplotlib,
+    _plot_validator_server_weights_subplots_dynamic_matplotlib,
+    _plot_validator_server_weights_subplots_matplotlib,
+    _plot_dividends_matplotlib,
+    _plot_bonds_matplotlib,
+    _plot_validator_server_weights_matplotlib,
+    _plot_incentives_matplotlib,
+    _plot_relative_dividends_comparisson,
+)
+
 logger = logging.getLogger(__name__)
-
-def _calculate_total_dividends(
-    validators: list[str],
-    dividends_per_validator: dict[str, list[float]],
-    base_validator: str,
-    num_epochs: int,
-) -> tuple[dict[str, float], dict[str, float]]:
-    """Calculates total dividends and percentage differences from a base validator."""
-
-    total_dividends: dict[str, float] = {}
-    for validator in validators:
-        divs: list[float] = dividends_per_validator.get(validator, [])
-        total_dividend = sum(divs[:num_epochs])
-        total_dividends[validator] = total_dividend
-
-    base_dividend = total_dividends.get(base_validator, None)
-    if base_dividend is None or base_dividend == 0.0:
-        logger.warning(
-            f"Warning: Base validator '{base_validator}' has zero or missing total dividends."
-        )
-        base_dividend = 1e-6
-
-    percentage_diff_vs_base: dict[str, float] = {}
-    for validator, total_dividend in total_dividends.items():
-        if validator == base_validator:
-            percentage_diff_vs_base[validator] = 0.0
-        else:
-            percentage_diff = ((total_dividend - base_dividend) / base_dividend) * 100.0
-            percentage_diff_vs_base[validator] = percentage_diff
-
-    return total_dividends, percentage_diff_vs_base
 
 
 def _calculate_total_dividends_with_frames(
@@ -110,106 +102,30 @@ def _plot_dividends(
     case_name: str,
     case: BaseCase,
     to_base64: bool = False,
+    engine: str = "matplotlib",  # or "plotly"
+    **kwargs,
 ) -> str | None:
     """
-    Generates a plot of dividends over epochs for a set of validators.
+    Plot dividends over epochs using specified engine.
+
+    Args:
+        engine: "matplotlib" or "plotly"
+        to_base64: Only used with matplotlib
+        **kwargs: Additional arguments passed to specific plotting function
     """
-
-    plt.close("all")
-    fig, ax_main = plt.subplots(figsize=(14, 6))
-
-    top_vals = getattr(case, "requested_validators", [])
-    if top_vals:
-        plot_validator_names = top_vals.copy()
-    else:
-        plot_validator_names = validators.copy()
-
-    if case.base_validator not in plot_validator_names:
-        plot_validator_names.append(case.base_validator)
-
-    validator_styles = _get_validator_styles(validators)
-
-    total_dividends, percentage_diff_vs_base = _calculate_total_dividends(
-        validators,
-        dividends_per_validator,
-        case.base_validator,
-        num_epochs,
-    )
-
-    num_epochs_calculated: int | None = None
-    x: np.ndarray = np.array([])
-
-    for idx, validator in enumerate(plot_validator_names):
-        if validator not in dividends_per_validator:
-            continue
-
-        dividends = dividends_per_validator[validator]
-        dividends_array = np.array(dividends, dtype=float)
-
-        if num_epochs_calculated is None:
-            num_epochs_calculated = len(dividends_array)
-            x = np.arange(num_epochs_calculated)
-
-        delta = 0.05
-        x_shifted = x + idx * delta
-
-        linestyle, marker, markersize, markeredgewidth = validator_styles.get(
-            validator, ("-", "o", 5, 1)
+    if engine == "matplotlib":
+        return _plot_dividends_matplotlib(
+            num_epochs, validators, dividends_per_validator,
+            case_name, case, to_base64, **kwargs
         )
-
-        total_dividend = total_dividends.get(validator, 0.0)
-        percentage_diff = percentage_diff_vs_base.get(validator, 0.0)
-
-        if abs(total_dividend) < 1e-6:
-            total_dividend_str = f"{total_dividend:.3e}"  # Scientific notation
-        else:
-            total_dividend_str = f"{total_dividend:.6f}"  # Standard float
-
-        if abs(percentage_diff) < 1e-12:
-            percentage_str = "(Base)"
-        elif percentage_diff > 0:
-            percentage_str = f"(+{percentage_diff:.1f}%)"
-        else:
-            percentage_str = f"({percentage_diff:.1f}%)"
-
-        label = f"{validator}: Total={total_dividend_str} {percentage_str}"
-
-        ax_main.plot(
-            x_shifted,
-            dividends_array[:num_epochs],  # restrict to requested epochs
-            marker=marker,
-            markeredgewidth=markeredgewidth,
-            markersize=markersize,
-            label=label,
-            alpha=0.7,
-            linestyle=linestyle,
+    elif engine == "plotly":
+        return plot_dividends_plotly(
+            num_epochs, validators, dividends_per_validator,
+            case_name, case, **kwargs
         )
-
-    if num_epochs_calculated is not None:
-        _set_default_xticks(ax_main, num_epochs_calculated)
-
-    ax_main.set_xlabel("Time (Epochs)")
-    ax_main.set_ylim(bottom=0)
-    ax_main.set_ylabel("Dividend per 1,000 Tao per Epoch")
-    ax_main.set_title(case_name)
-    ax_main.grid(True)
-    ax_main.legend()
-
-    from matplotlib.ticker import ScalarFormatter
-    ax_main.get_yaxis().set_major_formatter(ScalarFormatter(useMathText=True))
-    ax_main.ticklabel_format(style="sci", axis="y", scilimits=(-3, 3))
-
-    if case_name.startswith("Case 4"):
-        ax_main.set_ylim(0, 0.042)
-
-    plt.subplots_adjust(hspace=0.3)
-
-    if to_base64:
-        return _plot_to_base64(fig)
     else:
-        plt.show()
-        plt.close(fig)
-        return None
+        raise ValueError(f"Unknown plotting engine: {engine}")
+
 
 
 def _plot_relative_dividends(
@@ -218,229 +134,27 @@ def _plot_relative_dividends(
     case: BaseCase,
     num_epochs: int,
     epochs_padding: int = 0,
-    to_base64: bool = False
-) -> str | None:
-    plt.close("all")
-    plot_epochs = num_epochs - epochs_padding
-    if plot_epochs <= 0 or not validators_relative_dividends:
-        logger.warning("Nothing to plot (padding/empty data).")
-        return None
-
-    fig = plt.figure(figsize=(14, 10), constrained_layout=True)
-    gs = GridSpec(nrows=2, ncols=1, height_ratios=[1, 4], figure=fig)
-
-    ax_text = fig.add_subplot(gs[0])
-    ax_text.axis("off")
-
-    para = (
-        "“Validator Relative Dividends” is a performance metric that measures the deviation "
-        "between a validator’s actual dividends and the hypothetical zero-sum dividends they "
-        "would have earned purely in proportion to their stake. This difference highlights "
-        "whether a validator has over- or under-performed relative to the stake-weighted "
-        "zero-sum baseline across the entire network."
-    )
-    wrapped_para = textwrap.fill(para, width=160)
-
-    eq = (
-        r"$\dfrac{\text{Validator’s Dividends}}{\sum_{\text{all}}\text{Dividends}}"
-        r" \;-\; "
-        r"\dfrac{\text{Validator’s Stake}}{\sum_{\text{all}}\text{Stake}}$"
-    )
-
-    full_text = wrapped_para + "\n\n" + r"$\text{Relative Dividend} =$ " + eq
-
-    ax_text.text(
-        0.5, 0.5, full_text,
-        ha="center", va="center",
-        fontsize=12,
-        wrap=False
-    )
-
-    ax = fig.add_subplot(gs[1])
-    all_validators = list(validators_relative_dividends.keys())
-    top_vals = getattr(case, "requested_validators", []) or all_validators.copy()
-    if case.base_validator not in top_vals:
-        top_vals.append(case.base_validator)
-    x = np.arange(plot_epochs)
-    validator_styles = _get_validator_styles(all_validators)
-
-    for idx, validator in enumerate(top_vals):
-        series = validators_relative_dividends.get(validator, [])
-        if len(series) <= epochs_padding:
-            continue
-        arr = np.array([d if d is not None else np.nan for d in series[epochs_padding:]], dtype=float)
-        x_shifted = x + idx * 0.05
-        mean_pct = _compute_mean(arr) * 100
-        label = f"{case.hotkey_label_map.get(validator, validator)}: total = {mean_pct:+.5f}%"
-        ls, mk, ms, mew = validator_styles.get(validator, ("-", "o", 5, 1))
-        ax.plot(x_shifted, arr, label=label, alpha=0.7,
-                linestyle=ls, marker=mk, markersize=ms, markeredgewidth=mew)
-
-    ax.axhline(0, color="black", lw=1, ls="--", alpha=0.7)
-    _set_default_xticks(ax, plot_epochs)
-    ax.set_xlabel("Epoch", fontsize=12)
-    ax.set_ylabel("Relative Dividend (%)", fontsize=12)
-    legend = ax.legend()
-    for text in legend.get_texts():
-        if text.get_text().startswith(case.shift_validator_hotkey):
-            text.set_fontweight("bold")
-    ax.grid(True)
-    ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y * 100:.1f}%"))
-    fig.suptitle(f"Validators Relative Dividends\n{case_name}", fontsize=16)
-
-    if to_base64:
-        return _plot_to_base64(fig)
-    else:
-        plt.show()
-        plt.close(fig)
-        return None
-
-
-def _plot_relative_dividends_comparisson(
-    validators_relative_dividends_normal: dict[str, list[float]],
-    validators_relative_dividends_shifted: dict[str, list[float]],
-    case: BaseCase,
-    num_epochs: int,
-    epochs_padding: int = 0,
-    to_base64: bool = False,
-    use_stakes: bool = False
+    engine: str = "matplotlib",  # or "plotly"
+    **kwargs,
 ) -> str | None:
     """
-    Plots a comparison of dividends for each validator.
-    The element-wise differences are plotted (shifted - normal), and the legend shows
-    the difference in the means (displayed as a percentage).
+    Plot relative dividends using specified engine.
 
-    If 'use_stakes' is True and the case provides a stakes_dataframe property,
-    then each difference is divided by the normalized stake for that validator at that epoch.
-    The mean is recomputed from the newly calculated differences.
-
-    The first `epochs_padding` records are omitted from the plot.
+    Args:
+        engine: "matplotlib" or "plotly"
+        **kwargs: Additional arguments passed to specific plotting function
     """
-    plt.close("all")
-    # Adjust the number of epochs to be plotted.
-    plot_epochs = num_epochs - epochs_padding
-    if plot_epochs <= 0:
-        logger.warning("Epochs padding is too large relative to number of total epochs. Nothing to plot.")
-        return None
-
-    fig, ax = plt.subplots(figsize=(14 * 2, 6 * 2))
-
-    if not validators_relative_dividends_normal or not validators_relative_dividends_shifted:
-        logger.warning("No validator data to plot.")
-        return None
-
-    all_validators = list(validators_relative_dividends_normal.keys())
-
-    # Use the case's top validators if available; otherwise, plot all.
-    top_vals = getattr(case, "requested_validators", [])
-    if top_vals:
-        plot_validator_names = top_vals.copy()
+    if engine == "matplotlib":
+        return _plot_relative_dividends_matplotlib(
+            validators_relative_dividends, case_name, case, num_epochs, epochs_padding, **kwargs
+        )
+    elif engine == "plotly":
+        return plot_relative_dividends_plotly(
+            validators_relative_dividends, case_name, case, num_epochs, epochs_padding, **kwargs
+        )
     else:
-        plot_validator_names = all_validators.copy()
+        raise ValueError(f"Unknown plotting engine: {engine}")
 
-    # Ensure that the base (shifted) validator is included.
-    base_validator = getattr(case, "base_validator", None)
-    if base_validator and base_validator not in plot_validator_names:
-        plot_validator_names.append(base_validator)
-
-    x = np.arange(plot_epochs)
-    validator_styles = _get_validator_styles(all_validators)
-
-    # Retrieve stakes DataFrame if stakes normalization is requested.
-    if use_stakes and hasattr(case, "stakes_dataframe"):
-        df_stakes = case.stakes_dataframe
-    else:
-        df_stakes = None
-
-    for idx, validator in enumerate(plot_validator_names):
-        # Retrieve dividend series from both dictionaries.
-        normal_dividends = validators_relative_dividends_normal.get(validator, [])
-        shifted_dividends = validators_relative_dividends_shifted.get(validator, [])
-
-        # Skip plotting if one of the series is missing or not long enough.
-        if not normal_dividends or not shifted_dividends:
-            continue
-        if len(normal_dividends) <= epochs_padding or len(shifted_dividends) <= epochs_padding:
-            continue
-
-        # Slice off the first epochs_padding records.
-        normal_dividends = normal_dividends[epochs_padding:]
-        shifted_dividends = shifted_dividends[epochs_padding:]
-
-        # Replace missing values (None) with np.nan.
-        normal_dividends = np.array(
-            [d if d is not None else np.nan for d in normal_dividends],
-            dtype=float,
-        )
-        shifted_dividends = np.array(
-            [d if d is not None else np.nan for d in shifted_dividends],
-            dtype=float,
-        )
-
-        relative_diff = shifted_dividends - normal_dividends
-
-        if df_stakes is not None and validator in df_stakes.columns:
-            stakes_series = df_stakes[validator].to_numpy()
-            # Ensure stakes series is sliced to match the dividends.
-            if len(stakes_series) > epochs_padding:
-                stakes_series = stakes_series[epochs_padding:]
-            else:
-                stakes_series = np.full_like(relative_diff, np.nan)
-            with np.errstate(divide='ignore', invalid='ignore'):
-                relative_diff = np.where(stakes_series != 0, relative_diff / stakes_series, np.nan)
-            mean_difference = _compute_mean(relative_diff) * 100
-        else:
-            normal_mean = _compute_mean(normal_dividends)
-            shifted_mean = _compute_mean(shifted_dividends)
-            mean_difference = (shifted_mean - normal_mean) * 100
-
-        delta = 0.05
-        x_shifted = x + idx * delta
-
-        sign_str = f"{mean_difference:+.5f}%"
-        label = f"{validator}: mean difference/stake = {sign_str}" if use_stakes else f"{validator}: mean difference = {sign_str}"
-
-        linestyle, marker, markersize, markeredgewidth = validator_styles.get(
-            validator, ("-", "o", 5, 1)
-        )
-
-        ax.plot(
-            x_shifted,
-            relative_diff,
-            label=label,
-            alpha=0.7,
-            marker=marker,
-            markeredgewidth=markeredgewidth,
-            markersize=markersize,
-            linestyle=linestyle,
-        )
-
-    ax.axhline(y=0, color="black", linewidth=1, linestyle="--", alpha=0.7)
-
-    _set_default_xticks(ax, plot_epochs)
-
-    ax.set_xlabel("Epoch")
-    ax.set_ylabel("Absolute Difference")
-    ax.set_title("Comparison (shifted - normal) scaled by stake" if use_stakes else "Comparison (shifted - normal)")
-    ax.grid(True)
-
-    legend = ax.legend()
-    for text in legend.get_texts():
-        if text.get_text().startswith(case.shift_validator_hotkey):
-            text.set_fontweight('bold')
-
-    def to_percent(y, _):
-        return f"{y * 100:.1f}%"
-    ax.yaxis.set_major_formatter(FuncFormatter(to_percent))
-
-    plt.subplots_adjust(hspace=0.3)
-
-    if to_base64:
-        return _plot_to_base64(fig)
-    else:
-        plt.show()
-        plt.close(fig)
-        return None
 
 
 def _plot_bonds(
@@ -451,269 +165,48 @@ def _plot_bonds(
     case_name: str,
     to_base64: bool = False,
     normalize: bool = False,
+    engine: str = "matplotlib",
 ) -> str | None:
     """Generates a plot of bonds per server for each validator."""
 
-    x = list(range(num_epochs))
+    if engine == "plotly":
+        return plot_bonds_plotly(
+            num_epochs, validators, servers, bonds_per_epoch,
+            case_name, normalize
+        )
+    else:
+        return _plot_bonds_matplotlib(
+            num_epochs, validators, servers, bonds_per_epoch,
+            case_name, to_base64, normalize
+        )
 
-    fig, axes = plt.subplots(1, len(servers), figsize=(14, 5), sharex=True, sharey=True)
-    if len(servers) == 1:
-        axes = [axes]  # type: ignore
-
-    bonds_data = _prepare_bond_data(
-        bonds_per_epoch, validators, servers, normalize=normalize
-    )
-    validator_styles = _get_validator_styles(validators)
-
-    handles: list[plt.Artist] = []
-    labels: list[str] = []
-    for idx_s, server in enumerate(servers):
-        ax = axes[idx_s]
-        for idx_v, validator in enumerate(validators):
-            bonds = bonds_data[idx_s][idx_v]
-            linestyle, marker, markersize, markeredgewidth = validator_styles[validator]
-
-            (line,) = ax.plot(
-                x,
-                bonds,
-                alpha=0.7,
-                marker=marker,
-                markersize=markersize,
-                markeredgewidth=markeredgewidth,
-                linestyle=linestyle,
-                linewidth=2,
-            )
-            if idx_s == 0:
-                handles.append(line)
-                labels.append(validator)
-
-        _set_default_xticks(ax, num_epochs)
-
-        ylabel = "Bond Ratio" if normalize else "Bond Value"
-        ax.set_xlabel("Epoch")
-        if idx_s == 0:
-            ax.set_ylabel(ylabel)
-        ax.set_title(server)
-        ax.grid(True)
-
-        if normalize:
-            ax.set_ylim(0, 1.05)
-
-    fig.suptitle(
-        f"Validators bonds per Server{' normalized' if normalize else ''}\n{case_name}",
-        fontsize=14,
-    )
-    fig.legend(
-        handles,
-        labels,
-        loc="lower center",
-        ncol=len(validators),
-        bbox_to_anchor=(0.5, 0.02),
-    )
-    plt.tight_layout(rect=(0, 0.05, 0.98, 0.95))
-
-    if to_base64:
-        return _plot_to_base64(fig)
-
-    plt.show()
-    plt.close(fig)
-    return None
 
 def _plot_bonds_metagraph_dynamic(
     case: MetagraphCase,
-    bonds_per_epoch:    list[torch.Tensor],
-    default_miners:    list[str],
-    case_name:          str,
-    to_base64:          bool = False,
-    normalize:          bool = False,
-    legend_validators:  list[str] | None = None,
-    epochs_padding:     int = 0,
+    bonds_per_epoch: list[torch.Tensor],
+    default_miners: list[str],
+    case_name: str,
+    engine: str = "matplotlib",  # or "plotly"
+    **kwargs,
 ) -> str | None:
+    """
+    Plot bonds metagraph using specified engine.
 
-    num_epochs  = case.num_epochs
-    plot_epochs = num_epochs - epochs_padding
-    if plot_epochs <= 0:
-        logger.warning("Nothing to plot (padding >= total_epochs).")
-        return None
-
-    validators_epochs = case.validators_epochs
-    miners_epochs     = case.servers
-    selected_validators = case.requested_validators
-
-    bonds_data = _prepare_bond_data_dynamic(
-        bonds_per_epoch, validators_epochs, miners_epochs,
-        normalize=normalize,
-    )
-
-    subset_v = selected_validators or validators_epochs[0]
-
-    subset_m = case.selected_servers or default_miners
-
-    # miner_keys      = miners_epochs[0]
-    validator_keys: list[str] = []
-    for epoch in validators_epochs:
-        for v in epoch:
-            if v not in validator_keys:
-                validator_keys.append(v)
-
-    m_idx = _find_indices(subset_m, miners_epochs,    name="miner")
-    v_idx = _find_indices(subset_v, validators_epochs, name="validator")
-
-    plot_data: list[list[list[float]]] = []
-    for mi in m_idx:
-        per_val = []
-        for vi in v_idx:
-            series = []
-            for e in range(epochs_padding, num_epochs):
-                series.append(bonds_data[mi][vi][e])
-            per_val.append(series)
-        plot_data.append(per_val)
-
-    CHART_WIDTH   = 7.0  
-    CHART_HEIGHT  = 5.0 
-    TEXT_BLOCK_H  = 2.0  
-    COLS          = 2    
-
-    num_charts = len(subset_m)
-    rows       = math.ceil(num_charts / COLS)  
-
-    fig_w = CHART_WIDTH * COLS          
-    fig_h = TEXT_BLOCK_H + (CHART_HEIGHT * rows)
-
-    fig = plt.figure(figsize=(fig_w, fig_h), constrained_layout=False)
-
-    chart_block_h = CHART_HEIGHT * rows
-
-    outer_gs = GridSpec(
-        nrows=2,
-        ncols=1,
-        height_ratios=[TEXT_BLOCK_H, chart_block_h],
-        hspace=0.1,
-        figure=fig
-    )
-
-    top_gs = GridSpecFromSubplotSpec(
-        nrows=3,
-        ncols=1,
-        subplot_spec=outer_gs[0],
-        height_ratios=[0.5, 1.0, 0.5],
-        hspace=0.0
-    )
-
-    ax_title = fig.add_subplot(top_gs[0])
-    ax_title.axis("off")
-    title_norm = " normalized" if normalize else ""
-    title_str  = f"Validators bonds per Miner{title_norm}\n{case_name}"
-    ax_title.text(
-        0.5, 0.5,
-        title_str,
-        ha="center", va="center",
-        fontsize=14
-    )
-
-    ax_para = fig.add_subplot(top_gs[1])
-    ax_para.axis("off")
-
-    if normalize:
-        para = (
-            "This plot shows each miner’s *normalized* bond ratio from each validator over time.  "
-            "At every epoch, each miner’s incoming bonds have been scaled so that their total across "
-            "all validators equals 1.\n\n"
+    Args:
+        engine: "matplotlib" or "plotly"
+        **kwargs: Additional arguments passed to specific plotting function
+    """
+    if engine == "matplotlib":
+        return _plot_bonds_metagraph_dynamic_matplotlib(
+            case, bonds_per_epoch, default_miners, case_name, **kwargs
         )
-        ylabel = "Bond Ratio"
+    elif engine == "plotly":
+        return plot_bonds_metagraph_dynamic_plotly(
+            case, bonds_per_epoch, default_miners, case_name, **kwargs
+        )
     else:
-        para = (
-            "This plot shows each validator’s *absolute* bond value to each miner over time.  "
-            "At every epoch, the raw bond tensor is used, in the native units of a given simulation version.\n\n"
-        )
-        ylabel = "Bond Value"
+        raise ValueError(f"Unknown plotting engine: {engine}")
 
-    wrapped = textwrap.fill(para, width=140)
-    ax_para.text(
-        0.5, 0.5,
-        wrapped,
-        ha="center", va="center",
-        fontsize=11, wrap=False
-    )
-
-    ax_legend = fig.add_subplot(top_gs[2])
-    ax_legend.axis("off")
-
-    inner_gs = GridSpecFromSubplotSpec(
-        nrows=rows,
-        ncols=COLS,
-        subplot_spec=outer_gs[1],
-        wspace=0.3,
-        hspace=0.4
-    )
-
-    x = list(range(plot_epochs))
-    styles = _get_validator_styles(validator_keys)
-    handles = []
-    labels  = []
-
-    ticks = list(range(0, plot_epochs, 5))
-    if (plot_epochs - 1) not in ticks:
-        ticks.append(plot_epochs - 1)
-    tick_labels = [str(t) for t in ticks]
-
-    for i_miner, miner in enumerate(subset_m):
-        r, c = divmod(i_miner, COLS)
-        ax = fig.add_subplot(inner_gs[r, c])
-
-        for j, val in enumerate(subset_v):
-            ls, mk, ms, mew = styles[val]
-            line, = ax.plot(
-                x, plot_data[i_miner][j],
-                linestyle=ls,
-                marker=mk,
-                markersize=ms,
-                markeredgewidth=mew,
-                linewidth=2,
-                alpha=0.7
-            )
-            if i_miner == 0 and (legend_validators or subset_v) and (val in (legend_validators or subset_v)):
-                handles.append(line)
-                labels.append(case.hotkey_label_map.get(val, val))
-
-        ax.set_title(miner, fontsize=10)
-        ax.set_xticks(ticks)
-        ax.set_xticklabels(tick_labels)
-        ax.set_xlabel("Epoch")
-        if r == 0 and c == 0:
-            ax.set_ylabel(ylabel)
-        ax.grid(True)
-        if normalize:
-            ax.set_ylim(0, 1.05)
-        else:
-            ax.set_ylim(bottom=0)
-
-    total_slots = rows * COLS
-    for idx in range(num_charts, total_slots):
-        r, c = divmod(idx, COLS)
-        ax_empty = fig.add_subplot(inner_gs[r, c])
-        ax_empty.set_visible(False)
-
-    ncol = min(len(labels), 4)
-    ax_legend.legend(
-        handles,
-        labels,
-        loc="center",
-        ncol=ncol,
-        frameon=False,
-        fontsize="small",
-        handletextpad=0.3,
-        columnspacing=0.5
-    )
-
-    fig.tight_layout(w_pad=0.3, h_pad=0.4)
-
-    if to_base64:
-        return _plot_to_base64(fig)
-
-    plt.show()
-    plt.close(fig)
-    return None
 
 def _plot_validator_server_weights(
     validators: list[str],
@@ -721,104 +214,35 @@ def _plot_validator_server_weights(
     servers: list[str],
     num_epochs: int,
     case_name: str,
+    engine: str = "matplotlib",
     to_base64: bool = False,
+    **kwargs,
 ) -> str | None:
-    """Plots validator weights across servers over epochs."""
-    from .simulation_utils import _slice_tensors
-    weights_epochs = _slice_tensors(*weights_epochs, num_validators=len(validators), num_servers=len(servers))
+    """
+    Unified interface for plotting validator weights across servers over epochs.
 
-    validator_styles = _get_validator_styles(validators)
+    Args:
+        validators: List of validator identifiers
+        weights_epochs: List of weight tensors per epoch
+        servers: List of server identifiers
+        num_epochs: Number of epochs to plot
+        case_name: Name of the case for the title
+        engine: Rendering engine ("matplotlib" or "plotly")
+        to_base64: Whether to return base64 encoded image (matplotlib only)
+        **kwargs: Additional arguments passed to the rendering engine
 
-    y_values_all: list[float] = [
-        float(weights_epochs[epoch][idx_v][1].item())
-        for idx_v in range(len(validators))
-        for epoch in range(num_epochs)
-    ]
-    unique_y_values = sorted(set(y_values_all))
-    min_label_distance = 0.05
-    close_to_server_threshold = 0.02
-
-    def is_round_number(y: float) -> bool:
-        return abs((y * 20) - round(y * 20)) < 1e-6
-
-    y_tick_positions: list[float] = [0.0, 1.0]
-    y_tick_labels: list[str] = [servers[0], servers[1]]
-
-    for y in unique_y_values:
-        if y in [0.0, 1.0]:
-            continue
-        if (
-            abs(y - 0.0) < close_to_server_threshold
-            or abs(y - 1.0) < close_to_server_threshold
-        ):
-            continue
-        if is_round_number(y):
-            if all(
-                abs(y - existing_y) >= min_label_distance
-                for existing_y in y_tick_positions
-            ):
-                y_tick_positions.append(y)
-                y_percentage = y * 100
-                label = (
-                    f"{y_percentage:.0f}%"
-                    if float(y_percentage).is_integer()
-                    else f"{y_percentage:.1f}%"
-                )
-                y_tick_labels.append(label)
-        else:
-            if all(
-                abs(y - existing_y) >= min_label_distance
-                for existing_y in y_tick_positions
-            ):
-                y_tick_positions.append(y)
-                y_percentage = y * 100
-                label = (
-                    f"{y_percentage:.0f}%"
-                    if float(y_percentage).is_integer()
-                    else f"{y_percentage:.1f}%"
-                )
-                y_tick_labels.append(label)
-
-    ticks = list(zip(y_tick_positions, y_tick_labels))
-    ticks.sort(key=lambda x: x[0])
-    y_tick_positions, y_tick_labels = map(list, zip(*ticks))
-
-    fig_height = 1 if len(y_tick_positions) <= 2 else 3
-    fig, ax = plt.subplots(figsize=(14, fig_height))
-    ax.set_ylim(-0.05, 1.05)
-
-    for idx_v, validator in enumerate(validators):
-        y_values = [
-            float(weights_epochs[epoch][idx_v][1].item()) for epoch in range(num_epochs)
-        ]
-        linestyle, marker, markersize, markeredgewidth = validator_styles[validator]
-
-        ax.plot(
-            range(num_epochs),
-            y_values,
-            label=validator,
-            marker=marker,
-            linestyle=linestyle,
-            markersize=markersize,
-            markeredgewidth=markeredgewidth,
-            linewidth=2,
+    Returns:
+        For matplotlib: base64 string if to_base64=True, otherwise None
+        For plotly: HTML string with embedded chart
+    """
+    if engine.lower() == "plotly":
+        return plot_validator_server_weights_plotly(
+            validators, weights_epochs, servers, num_epochs, case_name, **kwargs
         )
-
-    ax.set_yticks(y_tick_positions)
-    ax.set_yticklabels(y_tick_labels)
-
-    _set_default_xticks(ax, num_epochs)
-
-    ax.set_xlabel("Epoch")
-    ax.set_title(f"Validators Weights to Servers \n{case_name}")
-    ax.legend()
-    ax.grid(True)
-
-    if to_base64:
-        return _plot_to_base64(fig)
-    plt.show()
-    plt.close(fig)
-    return None
+    else:
+        return _plot_validator_server_weights_matplotlib(
+            validators, weights_epochs, servers, num_epochs, case_name, to_base64, **kwargs
+        )
 
 
 def _plot_validator_server_weights_subplots(
@@ -828,253 +252,63 @@ def _plot_validator_server_weights_subplots(
     num_epochs: int,
     case_name: str,
     to_base64: bool = False,
+    epochs_padding: int = 0,
+    engine: str = "matplotlib",  # or "plotly"
+    **kwargs,
 ) -> str | None:
     """
-    Plots validator weights in subplots (one subplot per server) over epochs.
-    Each subplot shows lines for all validators, representing how much weight
-    they allocate to that server from epoch 0..num_epochs-1.
+    Plot validator server weights in subplots using specified engine.
+
+    Args:
+        validators: List of validator identifiers
+        weights_epochs: List of weight tensors per epoch
+        servers: List of server identifiers
+        num_epochs: Number of epochs to plot
+        case_name: Name for the case/simulation
+        to_base64: Whether to return matplotlib plot as base64 (matplotlib only)
+        epochs_padding: Number of epochs to skip from beginning
+        engine: "matplotlib" or "plotly"
+        **kwargs: Additional arguments passed to specific plotting function
     """
-    from .simulation_utils import _slice_tensors
-    weights_epochs = _slice_tensors(
-        *weights_epochs,
-        num_validators=len(validators),
-        num_servers=len(servers)
-    )
-
-    x = list(range(num_epochs))
-
-    fig, axes = plt.subplots(
-        1,
-        len(servers),
-        figsize=(14, 5),
-        sharex=True,
-        sharey=True
-    )
-
-    if len(servers) == 1:
-        axes = [axes]
-
-    validator_styles = _get_validator_styles(validators)
-
-    handles: list[plt.Artist] = []
-    labels: list[str] = []
-
-    for idx_s, server_name in enumerate(servers):
-        ax = axes[idx_s]
-        for idx_v, validator in enumerate(validators):
-            y_values = [
-                float(weights_epochs[epoch][idx_v][idx_s].item())
-                for epoch in range(num_epochs)
-            ]
-            linestyle, marker, markersize, markeredgewidth = validator_styles[validator]
-
-            (line,) = ax.plot(
-                x,
-                y_values,
-                alpha=0.7,
-                marker=marker,
-                markersize=markersize,
-                markeredgewidth=markeredgewidth,
-                linestyle=linestyle,
-                linewidth=2,
-                label=validator,
-            )
-
-            if idx_s == 0:
-                handles.append(line)
-                labels.append(validator)
-
-        _set_default_xticks(ax, num_epochs)
-
-        ax.set_xlabel("Epoch")
-        if idx_s == 0:
-            ax.set_ylabel("Validator Weight")
-        ax.set_title(server_name)
-        ax.set_ylim(0, 1.05)
-        ax.grid(True)
-
-    fig.suptitle(f"Validators Weights per Server\n{case_name}", fontsize=14)
-    fig.legend(
-        handles,
-        labels,
-        loc="lower center",
-        ncol=len(validators),
-        bbox_to_anchor=(0.5, 0.02),
-    )
-
-    plt.tight_layout(rect=(0, 0.07, 1, 0.95))
-
-    if to_base64:
-        return _plot_to_base64(fig)
-
-    plt.show()
-    plt.close(fig)
-    return None
-
+    if engine == "matplotlib":
+        return _plot_validator_server_weights_subplots_matplotlib(
+            validators, weights_epochs, servers, num_epochs, case_name,
+            to_base64, epochs_padding, **kwargs
+        )
+    elif engine == "plotly":
+        return plot_validator_server_weights_subplots_plotly(
+            validators, weights_epochs, servers, num_epochs, case_name,
+            epochs_padding, **kwargs
+        )
+    else:
+        raise ValueError(f"Unknown plotting engine: {engine}")
 
 
 def _plot_validator_server_weights_subplots_dynamic(
     case: MetagraphCase,
     default_miners: list[str],
+    case_name: str = "",
     epochs_padding: int = 0,
-    to_base64: bool = False,
+    engine: str = "matplotlib",  # or "plotly"
+    **kwargs,
 ) -> str | None:
     """
-    Dynamic version for metagraph-based weights, skipping the first `epochs_padding` epochs
-"""
-    total_epochs = case.num_epochs
-    plot_epochs  = total_epochs - epochs_padding
-    if plot_epochs <= 0:
-        print("Nothing to plot (padding >= total_epochs).")
-        return None
+    Plot validator server weights using specified engine.
 
-    subset_vals = case.requested_validators or case.validators_epochs[0]
-    subset_srvs = case.selected_servers   or default_miners
-    hotkey_map  = case.hotkey_label_map
-
-    weights_epochs = case.weights_epochs
-    validators_epochs = case.validators_epochs
-    servers_epochs    = case.servers
-
-    data_cube: list[list[list[float]]] = []
-    for srv in subset_srvs:
-        per_val = []
-        for val in subset_vals:
-            series = []
-
-            for e in range(epochs_padding, total_epochs):
-                ve, se, W = validators_epochs[e], servers_epochs[e], weights_epochs[e]
-                if (val in ve) and (srv in se):
-                    r, c = ve.index(val), se.index(srv)
-                    series.append(float(W[r, c].item()))
-                else:
-                    series.append(np.nan)
-            per_val.append(series)
-        data_cube.append(per_val)
-
-    CHART_WIDTH   = 7  
-    CHART_HEIGHT  = 5   
-    TEXT_BLOCK_H  = 2    
-    COLS          = 2   
-
-    num_charts = len(subset_srvs)
-    rows       = math.ceil(num_charts / COLS)
-
-    fig_w = CHART_WIDTH * COLS
-    fig_h = TEXT_BLOCK_H + (CHART_HEIGHT * rows)
-
-    fig = plt.figure(figsize=(fig_w, fig_h), constrained_layout=False)
-
-    chart_block_h = CHART_HEIGHT * rows
-
-    outer_gs = GridSpec(
-        nrows=2,
-        ncols=1,
-        height_ratios=[TEXT_BLOCK_H, chart_block_h],
-        hspace=0.1,
-        figure=fig
-    )
-
-    top_gs = GridSpecFromSubplotSpec(
-        nrows=3,
-        ncols=1,
-        subplot_spec=outer_gs[0],
-        height_ratios=[0.5, 1.0, 0.5],
-        hspace=0.0
-    )
-
-    ax_title = fig.add_subplot(top_gs[0])
-    ax_title.axis("off")
-    ax_title.text(
-        0.5, 0.5,
-        "Validators Weights per Miner",
-        ha="center", va="center",
-        fontsize=14
-    )
-
-    ax_para = fig.add_subplot(top_gs[1])
-    ax_para.axis("off")
-    paragraph = (
-        "“Validators Weights per Miner” is a visualization that shows how "
-        "validators allocate their stake to different miners over time. "
-        "Each line represents a validator’s weight on a specific miner."
-    )
-    ax_para.text(
-        0.5, 0.5,
-        textwrap.fill(paragraph, width=140),
-        ha="center", va="center",
-        fontsize=11, wrap=False
-    )
-
-    ax_legend = fig.add_subplot(top_gs[2])
-    ax_legend.axis("off")
-
-    inner_gs = GridSpecFromSubplotSpec(
-        nrows=rows,
-        ncols=COLS,
-        subplot_spec=outer_gs[1],
-        wspace=0.3,
-        hspace=0.4
-    )
-
-    x       = list(range(plot_epochs))
-    styles  = _get_validator_styles(subset_vals)
-    handles = []
-    labels  = []
-
-    for i_srv, srv in enumerate(subset_srvs):
-        r, c = divmod(i_srv, COLS)
-        ax = fig.add_subplot(inner_gs[r, c])
-
-        for i_val, val in enumerate(subset_vals):
-            series = data_cube[i_srv][i_val]
-            ls, mk, ms, mew = styles[val]
-            line, = ax.plot(
-                x, series,
-                linestyle=ls,
-                marker=mk,
-                markersize=ms,
-                markeredgewidth=mew,
-                linewidth=2,
-                alpha=0.7
-            )
-            if i_srv == 0:
-                handles.append(line)
-                labels.append(hotkey_map.get(val, val))
-
-        ax.set_title(srv, fontsize=10)
-        ax.grid(True)
-        ax.set_ylim(0, 1.05)
-        _set_default_xticks(ax, plot_epochs)
-        ax.set_xlabel("Epoch")
-        if c == 0:
-            ax.set_ylabel("Validator Weight")
-
-    total_slots = rows * COLS
-    for idx in range(num_charts, total_slots):
-        r, c = divmod(idx, COLS)
-        ax_empty = fig.add_subplot(inner_gs[r, c])
-        ax_empty.set_visible(False)
-
-    ncol = min(len(labels), 4)
-    ax_legend.legend(
-        handles, labels,
-        loc="center",
-        ncol=ncol,
-        frameon=False,
-        fontsize="small",
-        handletextpad=0.3,
-        columnspacing=0.5
-    )
-
-    fig.tight_layout(w_pad=0.3, h_pad=0.4)
-
-    if to_base64:
-        return _plot_to_base64(fig)
-
-    plt.show()
-    plt.close(fig)
-    return None
+    Args:
+        engine: "matplotlib" or "plotly"
+        **kwargs: Additional arguments passed to specific plotting function
+    """
+    if engine == "matplotlib":
+        return _plot_validator_server_weights_subplots_dynamic_matplotlib(
+            case, default_miners, epochs_padding, **kwargs
+        )
+    elif engine == "plotly":
+        return plot_validator_server_weights_subplots_dynamic_plotly(
+            case, default_miners, case_name, epochs_padding, **kwargs
+        )
+    else:
+        raise ValueError(f"Unknown plotting engine: {engine}")
 
 
 def _plot_incentives(
@@ -1082,173 +316,71 @@ def _plot_incentives(
     server_incentives_per_epoch: list[torch.Tensor],
     num_epochs: int,
     case_name: str,
+    case: BaseCase = None,
     to_base64: bool = False,
+    engine: str = "matplotlib",
+    **kwargs,
 ) -> str | None:
-    """Generates a plot of server incentives over epochs."""
+    """
+    Router function for plotting server incentives over epochs.
 
-    x = np.arange(num_epochs)
-    fig, ax = plt.subplots(figsize=(14, 3))
+    Args:
+        servers: List of server identifiers
+        server_incentives_per_epoch: List of tensors containing incentive values per epoch
+        num_epochs: Total number of epochs to plot
+        case_name: Name/description of the case being plotted
+        case: Optional BaseCase object for enhanced labeling
+        to_base64: Whether to return matplotlib plot as base64 string
+        engine: Rendering engine ("matplotlib" or "plotly")
+        **kwargs: Additional arguments passed to the plotting functions
 
-    for idx_s, server in enumerate(servers):
-        incentives: list[float] = [
-            float(server_incentive[idx_s].item())
-            for server_incentive in server_incentives_per_epoch
-        ]
-        ax.plot(x, incentives, label=server)
+    Returns:
+        For matplotlib: base64 string if to_base64=True, None otherwise
+        For plotly: HTML string with embedded chart
+    """
 
-    _set_default_xticks(ax, num_epochs)
-
-    ax.set_xlabel("Epoch")
-    ax.set_ylabel("Server Incentive")
-    ax.set_title(f"Server Incentives\n{case_name}")
-    ax.set_ylim(-0.05, 1.05)
-    ax.legend()
-    ax.grid(True)
-
-    if to_base64:
-        return _plot_to_base64(fig)
-    plt.show()
-    plt.close(fig)
-    return None
-
-def _plot_to_base64(fig: plt.Figure) -> str:
-    """Converts a Matplotlib figure to a Base64-encoded string."""
-
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", transparent=True, bbox_inches="tight", dpi=100)
-    buf.seek(0)
-    encoded_image = base64.b64encode(buf.read()).decode("ascii")
-    buf.close()
-    plt.close(fig)
-    return f'<img src="data:image/png;base64,{encoded_image}" height:auto;" draggable="false">'
-
-
-def _set_default_xticks(ax: Axes, num_epochs: int) -> None:
-    tick_locs = [0, 1, 2] + list(range(5, num_epochs, 5))
-    tick_labels = [str(i) for i in tick_locs]
-    ax.set_xticks(tick_locs)
-    ax.set_xticklabels(tick_labels, fontsize=8)
+    if engine.lower() == "plotly":
+        return plot_incentives_plotly(
+            servers=servers,
+            server_incentives_per_epoch=server_incentives_per_epoch,
+            num_epochs=num_epochs,
+            case_name=case_name,
+            case=case,
+            **kwargs
+        )
+    elif engine.lower() == "matplotlib":
+        return _plot_incentives_matplotlib(
+            servers=servers,
+            server_incentives_per_epoch=server_incentives_per_epoch,
+            num_epochs=num_epochs,
+            case_name=case_name,
+            case=case,
+            to_base64=to_base64,
+        )
+    else:
+        raise ValueError(f"Unsupported engine: {engine}. Use 'matplotlib' or 'plotly'.")
 
 
-def _prepare_bond_data(
-    bonds_per_epoch: list[torch.Tensor],
-    validators: list[str],
-    servers: list[str],
-    normalize: bool,
-) -> list[list[list[float]]]:
-    """Prepares bond data for plotting, normalizing if specified."""
-
-    num_epochs = len(bonds_per_epoch)
-    bonds_data: list[list[list[float]]] = []
-    for idx_s, _ in enumerate(servers):
-        server_bonds: list[list[float]] = []
-        for idx_v, _ in enumerate(validators):
-            validator_bonds = [
-                float(bonds_per_epoch[epoch][idx_v, idx_s].item())
-                for epoch in range(num_epochs)
-            ]
-            server_bonds.append(validator_bonds)
-        bonds_data.append(server_bonds)
-
-    if normalize:
-        for idx_s in range(len(servers)):
-            for epoch in range(num_epochs):
-                epoch_bonds = bonds_data[idx_s]
-                values = [epoch_bonds[idx_v][epoch] for idx_v in range(len(validators))]
-                total = sum(values)
-                if total > 1e-12:
-                    for idx_v in range(len(validators)):
-                        epoch_bonds[idx_v][epoch] /= total
-
-    return bonds_data
+def wrap_raise(fun):
+    import traceback
+    def __inner(*args, **kwargs):
+        try:
+            return fun(*args, **kwargs)
+        except Exception as exc:
+            traceback.print_exception(exc)
+            raise
+    return __inner
 
 
-def _prepare_bond_data_dynamic(
-    bonds_per_epoch:    list[torch.Tensor],
-    validators_epochs:  list[list[str]],
-    miners_epochs:      list[list[str]],
-    normalize:          bool = False,
-) -> list[list[list[float]]]:
-    """Optimized version using numpy operations and batch tensor conversion."""
-
-    num_epochs = len(bonds_per_epoch)
-
-    # Get unique validators while preserving order
-    validator_keys = []
-    seen = set()
-    for vlist in validators_epochs:
-        for v in vlist:
-            if v not in seen:
-                validator_keys.append(v)
-                seen.add(v)
-
-    max_miners = max(len(m) for m in miners_epochs)
-    num_validators = len(validator_keys)
-
-    # Pre-allocate result as numpy array for faster operations
-    result_array = np.zeros((max_miners, num_validators, num_epochs), dtype=np.float32)
-
-    # Pre-create validator key to global index mapping
-    global_vmap = {v: i for i, v in enumerate(validator_keys)}
-
-    for e in range(num_epochs):
-        W = bonds_per_epoch[e]
-        vkeys = validators_epochs[e]
-        mkeys = miners_epochs[e]
-
-        # Create index mappings
-        local_to_global_v = [global_vmap[v] for v in vkeys]
-
-        # Convert entire tensor to numpy once
-        W_np = W.cpu().numpy()
-
-        # Vectorized assignment
-        for mi, miner in enumerate(mkeys):
-            # Extract the entire row for this miner
-            miner_weights = W_np[:, mi]  # All validators for this miner
-
-            # Assign to global positions
-            for local_vi, global_vi in enumerate(local_to_global_v):
-                result_array[mi, global_vi, e] = miner_weights[local_vi]
-
-    if normalize:
-        # Vectorized normalization across epochs
-        for t in range(num_epochs):
-            epoch_slice = result_array[:, :, t]  # [miners, validators]
-            totals = epoch_slice.sum(axis=1, keepdims=True)  # Sum per miner
-            # Avoid division by zero
-            mask = totals > 1e-12
-            epoch_slice[mask.squeeze()] /= totals[mask.squeeze()]
-
-    # Convert back to nested lists
-    return result_array.tolist()
-
-
-def _get_validator_styles(
-    validators: list[str],
-) -> dict[str, tuple[str, str, int, int]]:
-    combined_styles = [("-", "+", 12, 2), ("--", "x", 12, 1), (":", "o", 4, 1)]
-    return {
-        validator: combined_styles[idx % len(combined_styles)]
-        for idx, validator in enumerate(validators)
-    }
-
-
-def _compute_mean(dividends: np.ndarray) -> float:
-    """Computes the mean over valid epochs where the validator is present."""
-    if np.all(np.isnan(dividends)):
-        return 0.0
-    return np.nanmean(dividends)
-
-
-
+@wrap_raise
 def _generate_chart_for_type(
     chart_type: str,
     case: BaseCase,
     final_case_name: str,
     simulation_results: tuple | None = None,
     to_base64: bool = True,
-    epochs_padding: int = 0
+    epochs_padding: int = 0,
+    engine: str = 'matplotlib',
 ) -> str:
     """
     Dispatches to the correct plotting function based on the chart type.
@@ -1262,6 +394,7 @@ def _generate_chart_for_type(
             num_epochs=case.num_epochs,
             case_name=final_case_name,
             to_base64=to_base64,
+            engine=engine,
         )
     elif chart_type == "weights_subplots":
         return  _plot_validator_server_weights_subplots(
@@ -1271,6 +404,7 @@ def _generate_chart_for_type(
             num_epochs=case.num_epochs,
             case_name=final_case_name,
             to_base64=to_base64,
+            engine=engine,
         )
     elif chart_type == "dividends":
         dividends_per_validator, *_ = simulation_results
@@ -1281,6 +415,7 @@ def _generate_chart_for_type(
             case_name=final_case_name,
             case=case,
             to_base64=to_base64,
+            engine=engine,
         )
     elif chart_type == "relative_dividends":
         _, validators_relative_dividends, *_ = simulation_results
@@ -1291,6 +426,7 @@ def _generate_chart_for_type(
             num_epochs=case.num_epochs,
             epochs_padding=epochs_padding,
             to_base64=to_base64,
+            engine=engine,
         )
     elif chart_type == "bonds":
         _, _, bonds_per_epoch, *_ = simulation_results
@@ -1301,6 +437,7 @@ def _generate_chart_for_type(
             bonds_per_epoch=bonds_per_epoch,
             case_name=final_case_name,
             to_base64=to_base64,
+            engine=engine,
         )
     elif chart_type == "normalized_bonds":
         _, _, bonds_per_epoch, *_ = simulation_results
@@ -1312,6 +449,7 @@ def _generate_chart_for_type(
             case_name=final_case_name,
             to_base64=to_base64,
             normalize=True,
+            engine=engine,
         )
     elif chart_type == "incentives":
         *_, server_incentives_per_epoch = simulation_results
@@ -1321,6 +459,7 @@ def _generate_chart_for_type(
             num_epochs=case.num_epochs,
             case_name=final_case_name,
             to_base64=to_base64,
+            engine=engine,
         )
     else:
         raise ValueError("Invalid chart type.")
@@ -1418,7 +557,10 @@ def _generate_relative_dividends_summary_html(
     )
 
     if label_map is not None:
-        df.index = [label_map.get(v, v) for v in df.index]
+        df.index = [
+            label_map[v] + f'<span style="font-size: 0.66rem;"><br>{v}</span>' if v in label_map else v
+            for v in df.index
+        ]
 
     tao_icon = (
         '<svg xmlns="http://www.w3.org/2000/svg" '
@@ -1454,7 +596,7 @@ def _generate_relative_dividends_summary_html(
 
     title_html = '<h4 class="mt-4">Relative Dividends Summary</h4>'
     desc_html = (
-        f'<p class="mb-3">'
+        f'<p class="mb-3 plotly-chart-html-description">'
         f"This table shows, for each of your top validators, the mean “relative dividend” "
         f"across different Yuma versions, after scaling by "
         f"<code>361 × 0.41 × (epochs-number) × alpha-tao-ratio</code>. "
@@ -1500,38 +642,16 @@ def _pick_default_miners(
         )
     ]
 
-    top_two_by_total = sorted_by_total[:2]
-    first_two_spread = sorted_by_spread[:2]
-    if set(first_two_spread) == set(top_two_by_total):
-        top_two_by_spread = sorted_by_spread[2:4]
-    else:
-        top_two_by_spread = [
-            hk for hk in sorted_by_spread
-            if hk not in top_two_by_total
-        ][:2]
+    total_count = 4
+    spread_count = 4
 
-    return top_two_by_total + top_two_by_spread
+    top_by_total = sorted_by_total[:total_count]
+    top_total_set = set(top_by_total)
+    top_by_spread = []
+    for hk in sorted_by_spread:
+        if hk not in top_total_set:
+            top_by_spread.append(hk)
+        if len(top_by_spread) >= spread_count:
+            break
 
-from typing import Any, Sequence
-
-def _find_indices(
-    subset: Sequence[Any],
-    epochs_list: Sequence[Sequence[Any]],
-    name: str = "item",
-) -> list[int]:
-    """
-    For each element in `subset`, find its .index(…) in the first
-    sub‐sequence of `epochs_list` that contains it. If any element
-    is missing, raise a RuntimeError with a clear message.
-    """
-    indices: list[int] = []
-    for x in subset:
-        # generator: e.index(x) only if x in e
-        idx = next(
-            (epoch.index(x) for epoch in epochs_list if x in epoch),
-            None
-        )
-        if idx is None:
-            raise RuntimeError(f"{name!r} {x!r} not found in any epoch")
-        indices.append(idx)
-    return indices
+    return top_by_total + top_by_spread
