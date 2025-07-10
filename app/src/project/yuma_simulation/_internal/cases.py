@@ -1,14 +1,16 @@
 import torch
 import pandas as pd
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Optional, Dict, List, Tuple 
 import logging
 from .metagraph_utils import (
-    epoch_hotkeys_by_uid,
-    diagnose_weight_only_neurons,
-    ordered_stakes_for_uids,
-    ordered_weights_for_uids,
+    slot_count, build_S_tensor, build_W_tensor,
+    pick_validators, run_block_diagnostics,
 )
+import random
+from django.conf import settings
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -173,85 +175,52 @@ class MetagraphCase(BaseCase):
     @classmethod
     def from_mg_dumper_data(
         cls,
-        mg_data: dict[str, Any],
-        requested_miners: Optional[list[str]] = None,
-    ) -> tuple["MetagraphCase", list[str], list[str]]:
-        uids = mg_data["uids"]
-        hotkeys = mg_data["hotkeys"]
-        weights = mg_data["weights"]
-        stakes = mg_data["stakes"]
+        mg_data: Dict[str, Any],
+        requested_miners: Optional[List[str]] = None,
+        *,
+        diagnostics: bool | None = None,
+    ) -> Tuple["MetagraphCase", List[str], List[str]]:
 
-        diagnose_weight_only_neurons(
-            weights=weights,
-            hotkeys=hotkeys,
-            uids=uids,
-            stakes=stakes,
-        )
+        blocks          = mg_data["blocks"]
+        hotkeys_by_blk  = {int(k): v for k, v in mg_data["hotkeys"].items()}
+        weights         = mg_data["weights"]
+        stakes          = mg_data["stakes"]
+        n_slots         = slot_count(hotkeys_by_blk)
 
-        epoch_hks = epoch_hotkeys_by_uid(
-            hotkeys = hotkeys,
-            uids     = uids,
-            stakes  = stakes,
-            blocks   = mg_data["blocks"],
-        )
+        requested_validators = pick_validators(hotkeys_by_blk, stakes)
 
-        validator_max_stake: dict[str, float] = {}
-
-        for blk_str, block_weights in weights.items():
-            for src_idx_str in block_weights.keys():
-                src_idx = int(src_idx_str)
-                hk_src = hotkeys[src_idx]
-
-                stake_amt = stakes.get(blk_str, {}).get(src_idx_str, 0.0)
-
-                prev_max = validator_max_stake.get(hk_src, 0.0)
-                if stake_amt > prev_max:
-                    validator_max_stake[hk_src] = stake_amt
-
-        sorted_validators = sorted(
-            validator_max_stake.items(),
-            key=lambda kv: kv[1],
-            reverse=True
-        )
-        requested_validators = [
-            hk for (hk, stake) in sorted_validators
-            if stake >= 1000
-        ]
-
-        invalid_miners: list[str] = []
+        # optional miner filter
+        invalid_miners: List[str] = []
         if requested_miners:
-            all_hks = set().union(*(set(hks) for hks in epoch_hks.values()))
-            invalid_miners = [hk for hk in requested_miners if hk not in all_hks]
+            all_hks = set().union(*(set(h) for h in hotkeys_by_blk.values()))
+            invalid_miners   = [hk for hk in requested_miners if hk not in all_hks]
             requested_miners = [hk for hk in requested_miners if hk in all_hks]
 
-        metas: list[dict] = []
-        for block in mg_data["blocks"]:
-            b = str(block)
+        # choose diagnostics blocks
+        diag_blocks = set(random.sample(blocks, min(10, len(blocks))))
+        diagnostics_enabled = diagnostics if diagnostics is not None \
+                            else getattr(settings, "ENABLE_METAGRAPH_DIAGNOSTICS", False)
 
-            stakes_map = stakes[b]    # dict[str(idx) → float stake]
-            weight_map = weights[b]   # dict[str(i) → dict[str(j) → float]]
+        metas: List[Dict[str, Any]] = []
+        for block in blocks:
+            S = build_S_tensor(stakes[str(block)], n_slots)
+            W = build_W_tensor(weights[str(block)], n_slots)
 
-            S = ordered_stakes_for_uids(stakes_map, uids)      # list[float], len = len(uids)
-            W = ordered_weights_for_uids(weight_map, uids)     # list[list[float]], NxN
-            hk = epoch_hks[block]
-            metas.append({
-                "S": S,
-                "W": W,
-                "hotkeys": hk,
-            })
+            slot_view = hotkeys_by_blk[block]
+            hk = [t[0] for t in slot_view]
+
+            # comparing the fetched dumper data with on-chain data for testing purposes
+            if diagnostics_enabled and block in diag_blocks:
+                run_block_diagnostics(block, mg_data["netuid"], S, W, hk)
+
+            metas.append({"S": S, "W": W, "hotkeys": hk})
 
         case = cls(
             metas=metas,
             num_epochs=len(metas),
             requested_validators=requested_validators,
         )
-
-        case.hotkey_label_map = {
-            hk: label
-            for hk, label in zip(mg_data["hotkeys"], mg_data["labels"])
-            if label
-        }
-
+        case.hotkey_label_map = mg_data["labels"]
         case.selected_servers = requested_miners or []
 
         return case, invalid_miners

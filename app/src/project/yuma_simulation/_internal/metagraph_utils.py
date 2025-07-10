@@ -1,5 +1,4 @@
 
-from collections import defaultdict
 import logging
 import os
 import time
@@ -9,12 +8,9 @@ import bittensor as bt
 from multiprocessing import Pool
 from .experiment_setup import ExperimentSetup
 from typing import Optional
-from collections import defaultdict
-from typing import Dict, List, Set, Tuple, Union
+from typing import Dict, List, Set, Tuple
 
-BlockKey  = Union[int, str]
-NeuronKey = Union[int, str]
-
+HotkeyTuple = Tuple[str, bool, bool]
 
 logger = logging.getLogger(__name__)
 
@@ -344,69 +340,89 @@ def epoch_hotkeys_by_uid(
     return result
 
 
-def diagnose_weight_only_neurons(
-    weights: Dict[BlockKey, Dict[NeuronKey, Dict[NeuronKey, float]]],
-    stakes:  Dict[BlockKey, Dict[NeuronKey, float]],
-    *,
-    uids:    List[int] | None = None,
-    hotkeys: List[str] | None = None,
-) -> Dict[int, Set[int]]:
+def slot_count(hotkeys_by_blk: Dict[int, List[str]]) -> int:
+    """Return 256 or 1024 depending on subnet size."""
+    return len(next(iter(hotkeys_by_blk.values())))
+
+def build_S_tensor(stakes_map: Dict[str, float], n_slots: int) -> torch.Tensor:
+    S = torch.zeros(n_slots, dtype=torch.float32)
+    for uid, stake in stakes_map.items():
+        S[int(uid)] = float(stake)
+    return S
+
+def build_W_tensor(weight_map: Dict[str, Dict[str, float]],
+                   n_slots: int) -> torch.Tensor:
+    W = torch.zeros((n_slots, n_slots), dtype=torch.float32)
+    for src_uid, row in weight_map.items():
+        i = int(src_uid)
+        for tgt_uid, w in row.items():
+            j = int(tgt_uid)
+            W[i, j] = float(w)
+    return W
+
+def pick_validators(
+    hotkeys_by_blk: Dict[int, List[HotkeyTuple]],
+    min_stake: float = 1000.0,
+    stakes: Dict[str, Dict[str, float]] | None = None,
+) -> List[str]:
     """
-    • Returns {block_id: {src_idx, …}} for every source‑neuron index that has
-      weights but no stake row in the same block.
-    • Logs weight‑vs‑stake counts per block and warns if either ≠ 256.
+    Return hotkey strings that ever had is_validator == True
+    (optionally stake ≥ min_stake if stakes is provided).
     """
-    anomalies: Dict[int, Set[int]] = defaultdict(set)
+    vals: Set[str] = set()
 
-    # ------------------------------------------------------------------- core
-    for block_raw, src_dict in weights.items():
-        try:
-            block_id = int(block_raw)
-        except (TypeError, ValueError):
-            logger.warning("Skipping non‑numeric block key: %s", block_raw)
-            continue
-
-        stake_map = stakes.get(block_raw) or stakes.get(str(block_id)) or {}
-        stake_keys_str = {str(k) for k in stake_map.keys()}
-
-        # ---- weight‑only detection
-        for src_raw in src_dict.keys():
-            try:
-                src_idx = int(src_raw)
-            except (TypeError, ValueError):
-                logger.warning("Skipping non‑numeric neuron key: %s (block %s)", src_raw, block_id)
+    for blk_int, slot_list in hotkeys_by_blk.items():
+        for uid, slot in enumerate(slot_list):
+            hk, is_val, _ = slot
+            if not (hk and is_val):
                 continue
 
-            if str(src_idx) not in stake_keys_str:
-                anomalies[block_id].add(src_idx)
+            if stakes is not None:
+                stake_amt = stakes[str(blk_int)].get(str(uid), 0.0)
+                if stake_amt < min_stake:
+                    continue
 
-        # ---- count diagnostics
-        w_count = len(src_dict)              # distinct weight sources
-        s_count = len(stake_map)             # stake rows
+            vals.add(hk)
 
-        if w_count != 256 or s_count != 256:
-            logger.warning(
-                "Block %s: weight sources = %d, stake rows = %d (expected 256 each)",
-                block_id, w_count, s_count
-            )
-        else:
-            logger.info(
-                "Block %s: counts OK (256 sources, 256 stakes)", block_id
-            )
+    return sorted(vals)
 
-    # ---------------------------------------------------------------- logging
-    if anomalies:
-        logger.warning("Detected weight‑only neurons (missing stakes):")
-        for b, idx_set in sorted(anomalies.items()):
-            logger.warning("  • Block %s:", b)
-            for idx in sorted(idx_set):
-                uid    = uids[idx]    if uids    and 0 <= idx < len(uids)    else "?"
-                hotkey = hotkeys[idx] if hotkeys and 0 <= idx < len(hotkeys) else ""
-                logger.warning("      idx=%-4d  uid=%-6s  %s", idx, uid, hotkey)
-    else:
-        logger.info("No weight‑only neurons found — stakes align with weights.")
+def run_block_diagnostics(block: int,
+                          netuid: int,
+                          S: torch.Tensor,
+                          W: torch.Tensor,
+                          hotkeys: List[str],
+                          tol: float = 1e-6) -> None:
+    """
+    Compare local S, W, hotkeys against on‑chain metagraph for a single block.
+    Logs summary lines; raises nothing.
+    """
+    try:
+        from bittensor import subtensor     # import lazily
+        meta = subtensor.metagraph(netuid=netuid, block=block, lite=False)
+    except Exception as e:
+        logger.warning("Diag fetch failed for %d: %s", block, e)
+        return
 
-    return anomalies
+    meta_S = torch.from_numpy(meta.S)
+    meta_W = torch.from_numpy(meta.W)
+
+    # stakes
+    miss_s = torch.nonzero((meta_S - S).abs() > tol, as_tuple=False)
+    if miss_s.numel():
+        logger.error("STAKE diff @%d (%d uids)", block, miss_s.numel())
+
+    # weights
+    diff_W = (meta_W - W).abs()
+    mask   = ~((meta_W == 1.0) & (W == 0.0))
+    miss_w = torch.nonzero(diff_W.gt(tol) & mask, as_tuple=False)
+    if miss_w.numel():
+        logger.error("WEIGHT diff @%d (%d cells)", block, miss_w.numel())
+
+    # hotkeys
+    miss_h = [i for i, (o, l) in enumerate(zip(meta.hotkeys, hotkeys)) if o != l]
+    if miss_h:
+        logger.error("HOTKEY diff @%d (%d slots)", block, len(miss_h))
+
 
 if __name__ == "__main__":
     DownloadMetagraph().run()
