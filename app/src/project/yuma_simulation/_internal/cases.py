@@ -216,7 +216,7 @@ class MetagraphCase(BaseCase):
             # zero stake for inactive accounts
             S *= is_active_t
 
-            hk = [t[0] for t in slot_view]
+            hk = [t[0] for t in slot_view if t]
 
             # comparing the fetched dumper data with on-chain data for testing purposes
             if diagnostics_enabled and block in diag_blocks:

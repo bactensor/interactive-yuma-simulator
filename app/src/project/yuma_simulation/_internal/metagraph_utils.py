@@ -373,8 +373,8 @@ def pick_validators(
 
     for blk_int, slot_list in hotkeys_by_blk.items():
         for uid, slot in enumerate(slot_list):
-            hk, is_val, _ = slot
-            if not (hk and is_val):
+            hk, is_val, is_active = slot
+            if not (hk and is_val and is_active):
                 continue
 
             if stakes is not None:
