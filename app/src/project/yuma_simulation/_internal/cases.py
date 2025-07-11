@@ -205,6 +205,17 @@ class MetagraphCase(BaseCase):
             W = build_W_tensor(weights[str(block)], n_slots)
 
             slot_view = hotkeys_by_blk[block]
+
+            # build is_active tensor for each uid
+            is_active_t = torch.tensor(
+                [tpl[2] for tpl in slot_view],
+                dtype=torch.float32,
+                device=S.device,
+            )
+
+            # zero stake for inactive accounts
+            S *= is_active_t
+
             hk = [t[0] for t in slot_view]
 
             # comparing the fetched dumper data with on-chain data for testing purposes
@@ -223,7 +234,7 @@ class MetagraphCase(BaseCase):
         case.selected_servers = requested_miners or []
 
         return case, invalid_miners
-
+    
     @property
     def weights_epochs(self) -> list[torch.Tensor]:
         """
