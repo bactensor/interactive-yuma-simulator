@@ -1,5 +1,4 @@
 
-from collections import defaultdict
 import logging
 import os
 import time
@@ -9,6 +8,9 @@ import bittensor as bt
 from multiprocessing import Pool
 from .experiment_setup import ExperimentSetup
 from typing import Optional
+from typing import Dict, List, Set, Tuple
+
+HotkeyTuple = Tuple[str, bool, bool]
 
 logger = logging.getLogger(__name__)
 
@@ -172,209 +174,91 @@ class DownloadMetagraph:
             logger.error("Error occurred during metagraph download in pool.", e)
             raise
 
-def fetch_metagraph_hotkeys(
-    netuid: int,
-    block: int,
-    max_retries: int = 5,
-    retry_delay: float = 5.0,
-) -> list[str]:
+def slot_count(hotkeys_by_blk: Dict[int, List[str]]) -> int:
+    """Return 256 or 1024 depending on subnet size."""
+    return len(next(iter(hotkeys_by_blk.values())))
+
+def build_S_tensor(stakes_map: Dict[str, float], n_slots: int) -> torch.Tensor:
+    S = torch.zeros(n_slots, dtype=torch.float32)
+    for uid, stake in stakes_map.items():
+        S[int(uid)] = float(stake)
+    return S
+
+def build_W_tensor(weight_map: Dict[str, Dict[str, float]],
+                   n_slots: int) -> torch.Tensor:
+    W = torch.zeros((n_slots, n_slots), dtype=torch.float32)
+    for src_uid, row in weight_map.items():
+        i = int(src_uid)
+        for tgt_uid, w in row.items():
+            j = int(tgt_uid)
+            W[i, j] = float(w)
+    return W
+
+def pick_validators(
+    hotkeys_by_blk: Dict[int, List[HotkeyTuple]],
+    min_stake: float = 1000.0,
+    stakes: Dict[str, Dict[str, float]] | None = None,
+) -> List[str]:
     """
-    Fetch the full metagraph for `netuid` at `block` and return only the
-    256-length list of hotkeys (one per slot). Retries RPC up to max_retries.
+    Return hotkey strings that ever had is_validator == True
+    (optionally stake ≥ min_stake if stakes is provided).
     """
-    for attempt in range(1, max_retries + 1):
-        try:
-            with bt.subtensor("archive") as archive:
-                meta = archive.metagraph(netuid=netuid, block=block, lite=False)
-                hotkeys: list[str] = meta.hotkeys
+    vals: Set[str] = set()
 
-            if len(hotkeys) != 256:
-                logger.warning(
-                    f"Block {block}: Expected 256 hotkeys, got {len(hotkeys)}"
-                )
-            return hotkeys
+    for blk_int, slot_list in hotkeys_by_blk.items():
+        for uid, slot in enumerate(slot_list):
+            hk, is_val, is_active = slot
+            if not (hk and is_val and is_active):
+                continue
 
-        except Exception as exc:
-            logger.warning(
-                f"Attempt {attempt}/{max_retries} failed fetching block {block}: {exc}"
-            )
-            if attempt < max_retries:
-                time.sleep(retry_delay)
-            else:
-                raise RuntimeError(
-                    f"Unable to fetch metagraph hotkeys for netuid={netuid}, "
-                    f"block={block} after {max_retries} attempts."
-                )
+            if stakes is not None:
+                stake_amt = stakes[str(blk_int)].get(str(uid), 0.0)
+                if stake_amt < min_stake:
+                    continue
 
+            vals.add(hk)
 
-def filter_duplicate_validators(
-    weight_map: dict[str, dict[str, float]],
-    uids: list[int],
-    stakes: dict[str, float],
-    hotkeys,
-) -> dict[str, dict[str, float]]:
+    return sorted(vals)
+
+def run_block_diagnostics(block: int,
+                          netuid: int,
+                          S: torch.Tensor,
+                          W: torch.Tensor,
+                          hotkeys: List[str],
+                          tol: float = 1e-6) -> None:
     """
-    Filters weight_map to keep only one validator per UID.
-    Selection criteria: 1) Most connections, 2) If tied, larger index.
+    Compare local S, W, hotkeys against on‑chain metagraph for a single block.
+    Logs summary lines; raises nothing.
     """
-    # Group validator indices by their UID
-    uid_to_validator_indices = defaultdict(list)
-    for idx_str in weight_map.keys():
-        idx = int(idx_str)
-        if 0 <= idx < len(uids):
-            uid = uids[idx]
-            uid_to_validator_indices[uid].append(idx)
+    try:
+        st = get_archive_session()
+        meta = st.metagraph(netuid=netuid,
+                            block=block,
+                            lite=False)
+    except Exception as e:
+        logger.warning("Diag fetch failed for %d: %s", block, e)
+        return
 
-    # Select best validator for each UID
-    indices_to_keep = set()
-    for uid, validator_indices in uid_to_validator_indices.items():
-        if len(validator_indices) == 1:
-            indices_to_keep.add(validator_indices[0])
-        else:
-            # Find validator with highest stake, then largest index
-            best_idx = max(
-                validator_indices,
-                key=lambda idx: (stakes[str(idx)], idx)
-            )
-            indices_to_keep.add(best_idx)
+    meta_S = torch.from_numpy(meta.S)
+    meta_W = torch.from_numpy(meta.W)
 
-    # Build filtered weight_map
-    return {
-        idx_str: row
-        for idx_str, row in weight_map.items()
-        if int(idx_str) in indices_to_keep
-    }
+    # stakes
+    miss_s = torch.nonzero((meta_S - S).abs() > tol, as_tuple=False)
+    if miss_s.numel():
+        logger.error("STAKE diff @%d (%d uids)", block, miss_s.numel())
 
-def ordered_weights_for_uids(
-    weight_map: dict[str, dict[str, float]],
-    uids: list[int],
-    n_slots: Optional[int] = None,
-) -> torch.Tensor:
-    """
-    Build a (256×256) or (1024×1024) weight matrix.
+    # weights
+    diff_W = (meta_W - W).abs()
+    mask   = ~((meta_W == 1.0) & (W == 0.0))
+    miss_w = torch.nonzero(diff_W.gt(tol) & mask, as_tuple=False)
+    if miss_w.numel():
+        logger.error("WEIGHT diff @%d (%d cells)", block, miss_w.numel())
 
-    Args:
-      weight_map: { str(idx_i) → { str(idx_j) → weight } }
-      uids:       list where uids[idx] is the global UID for that row/col.
-      n_slots:    if None, auto-detect: any uid ≥256 → 1024, else 256;
-                  otherwise uses exactly this number of slots.
+    # hotkeys
+    miss_h = [i for i, (o, l) in enumerate(zip(meta.hotkeys, hotkeys)) if o != l]
+    if miss_h:
+        logger.error("HOTKEY diff @%d (%d slots)", block, len(miss_h))
 
-    Returns:
-      Tensor of shape (n_slots, n_slots) with weight_map values placed
-      at (ui, uj), defaults to 0.0 elsewhere.
-    """
-    N = len(uids)
-
-    if n_slots is None:
-        max_uid = max(uids) if uids else -1
-        n_slots = 1024 if max_uid > 255 else 256
-
-    result = np.zeros((n_slots, n_slots), dtype=np.float32)
-    for idx_i_str, row in weight_map.items():
-        i = int(idx_i_str)
-        if 0 <= i < N:
-            ui = uids[i]
-            if 0 <= ui < n_slots:
-                for idx_j_str, w in row.items():
-                    j = int(idx_j_str)
-                    if 0 <= j < N:
-                        uj = uids[j]
-                        if 0 <= uj < n_slots:
-                            result[ui, uj] = float(w)
-    return torch.from_numpy(result)
-
-
-def ordered_stakes_for_uids(
-    stakes_map: dict[str, float],
-    uids: list[int],
-    n_slots: Optional[int] = None,
-) -> torch.Tensor:
-    """
-    Build a length-256 or length-1024 stake vector.
-
-    Args:
-      stakes_map: { str(idx) → stake } referring to uids[idx].
-      uids:       list where uids[idx] is the global UID.
-      n_slots:    if None, auto-detect: any uid ≥256 → 1024, else 256;
-                  otherwise uses exactly this number of slots.
-
-    Returns:
-      Tensor S of length n_slots where S[uid] is the max stake seen,
-      or 0.0 if none.
-    """
-    N = len(uids)
-
-    if n_slots is None:
-        max_uid = max(uids) if uids else -1
-        n_slots = 1024 if max_uid > 255 else 256
-
-    result = np.zeros(n_slots, dtype=np.float32)
-    for idx_str, stake in stakes_map.items():
-        idx = int(idx_str)
-        if 0 <= idx < N:
-            uid = uids[idx]
-            if 0 <= uid < n_slots:
-                val = float(stake)
-                if val > result[uid]:
-                    result[uid] = val
-    return torch.from_numpy(result)
-
-def epoch_hotkeys_by_uid(
-    hotkeys: list[str],
-    uids: list[int],
-    stakes: dict[str, dict[str, float]],
-    blocks: list[int],
-    n_slots: Optional[int] = None,
-) -> dict[int, list[str]]:
-    """
-    For each block in `blocks`, produce a list of length `n_slots` where:
-      - By default slot i = "i" (string form).
-      - If a given block has stakes[str(block)], then for each `"uid_idx"` in that dict:
-          uid_idx = int(uid_idx_str)
-          uid     = int(uids[uid_idx])
-          hotkey  = hotkeys[uid_idx]
-        we set slot_list[uid] = hotkey.
-    If n_slots is None, scan all blocks’ stakes once to pick 256 vs. 1024:
-      - If max(uid) > 255 → use n_slots=1024
-      - Otherwise → n_slots=256
-    Return a dict: { block_number → [hk_for_slot_0, hk_for_slot_1, …] }.
-    """
-    # Step 1: Auto-detect n_slots if caller passed n_slots=None
-    if n_slots is None:
-        max_uid_seen = -1
-        for block_str, block_stakes in stakes.items():
-            for uid_idx_str in block_stakes:
-                uid_idx = int(uid_idx_str)
-                # compute actual uid
-                uid = int(uids[uid_idx])
-                if uid > max_uid_seen:
-                    max_uid_seen = uid
-        # If any uid > 255, use 1024; otherwise 256
-        n_slots = 1024 if max_uid_seen > 255 else 256
-
-    result: dict[int, list[str]] = {}
-
-    # Step 2: For each block, build the per-slot hotkey list
-    for blk in blocks:
-        # Initialize defaults: slot i → str(i)
-        hk_by_slot: list[str] = [str(slot) for slot in range(n_slots)]
-
-        block_key = str(blk)
-        if block_key in stakes:
-            selected_uids_stakes = {}
-            for uid_idx_str, stake_amt in stakes[block_key].items():
-                uid_idx = int(uid_idx_str)
-                uid = int(uids[uid_idx])
-                # for duplicated uids choose select one with highest stake
-                if stake_amt >= selected_uids_stakes.get(uid, -1):
-                    selected_uids_stakes[uid] = stake_amt
-                    if 0 <= uid < n_slots:
-                        hk_by_slot[uid] = hotkeys[uid_idx]
-                # If uid is outside 0..n_slots−1, we simply ignore it.
-
-        result[blk] = hk_by_slot
-
-    return result
 
 if __name__ == "__main__":
     DownloadMetagraph().run()
