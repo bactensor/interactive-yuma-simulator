@@ -1,7 +1,7 @@
 import torch
 import pandas as pd
 from dataclasses import dataclass, field
-from typing import Any, Optional, Dict, List, Tuple 
+from typing import Any, Optional, Dict, List, Tuple
 import logging
 from .metagraph_utils import (
     slot_count, build_S_tensor, build_W_tensor,
@@ -186,7 +186,7 @@ class MetagraphCase(BaseCase):
         stakes          = mg_data["stakes"]
         n_slots         = slot_count(hotkeys_by_blk)
 
-        requested_validators = pick_validators(hotkeys_by_blk, stakes)
+        requested_validators = pick_validators(hotkeys_by_blk=hotkeys_by_blk, stakes=stakes)
 
         # optional miner filter
         invalid_miners: List[str] = []

@@ -192,6 +192,14 @@ def build_W_tensor(weight_map: Dict[str, Dict[str, float]],
         for tgt_uid, w in row.items():
             j = int(tgt_uid)
             W[i, j] = float(w)
+    
+    # Apply diagonal masking to remove self-weights (except for uid 0)
+    # This matches the Rust implementation's inplace_mask_diag_except_index
+    # where owner_uid is always 0
+    for i in range(n_slots):
+        if i != 0:  # Keep uid 0's self-weight
+            W[i, i] = 0.0
+    
     return W
 
 def pick_validators(
@@ -212,7 +220,7 @@ def pick_validators(
                 continue
 
             if stakes is not None:
-                stake_amt = stakes[str(blk_int)].get(str(uid), 0.0)
+                stake_amt = float(stakes[str(blk_int)].get(str(uid), 0.0))
                 if stake_amt < min_stake:
                     continue
 
@@ -258,6 +266,31 @@ def run_block_diagnostics(block: int,
     miss_h = [i for i, (o, l) in enumerate(zip(meta.hotkeys, hotkeys)) if o != l]
     if miss_h:
         logger.error("HOTKEY diff @%d (%d slots)", block, len(miss_h))
+
+
+def diagnose_stake_issue(block: int, netuid: int, S: torch.Tensor, hotkeys: List[str]) -> None:
+    """
+    Print the entire S tensor for the built tensor and on-chain data for comparison.
+    """
+    logger.error(f"\n=== STAKE DIAGNOSTIC FOR BLOCK {block} ===")
+    
+    # Log our built S tensor
+    logger.error(f"Built S tensor (shape: {S.shape}):")
+    logger.error(f"{S}")
+    
+    # Fetch and log on-chain data
+    try:
+        st = get_archive_session()
+        meta = st.metagraph(netuid=netuid, block=block, lite=False)
+        meta_S = torch.from_numpy(meta.S)
+        
+        logger.error(f"\nOn-chain S tensor (shape: {meta_S.shape}):")
+        logger.error(f"{meta_S}")
+        
+    except Exception as e:
+        logger.error(f"Failed to fetch on-chain data: {e}")
+    
+    logger.error("=== END STAKE DIAGNOSTIC ===\n")
 
 
 if __name__ == "__main__":
