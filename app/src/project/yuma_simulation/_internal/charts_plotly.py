@@ -16,6 +16,7 @@ from project.yuma_simulation._internal.cases import BaseCase, MetagraphCase
 from project.yuma_simulation._internal.charts_data import (
     _prepare_relative_dividends_data,
     _get_relative_dividends_description_and_formula,
+    _get_dividends_description_and_formula,
     _prepare_bonds_metagraph_data,
     _get_bonds_description_and_labels,
     _prepare_validator_server_weights_subplots_dynamic_data,
@@ -197,6 +198,11 @@ class PlotlyChartBuilder:
             layout['yaxis'].update({
                 'tickformat': '.1%'
             })
+        elif self.config.y_axis_format == "fixed":
+            layout['yaxis'].update({
+                'tickformat': '.6f',  # Fixed decimal format with 6 decimal places
+                'exponentformat': 'none'  # Disable scientific notation
+            })
 
         # Configure y-axis range
         if self.config.y_axis_range != (None, None):
@@ -352,7 +358,8 @@ def _adapt_data_for_subplots(data: Dict[str, Any],
         'subset_titles': chart_titles,
         'chart_data': chart_data,
         'x': data['x'],
-        'y_range': data.get('y_range', [None, None])
+        'y_range': data.get('y_range', [None, None]),
+        'plot_epochs': data.get('plot_epochs')  # Pass through for x-axis tick handling
     }
 
 
@@ -528,6 +535,16 @@ class ChartFactory:
                     **layout['xaxis'],
                     'title': "Epoch"
                 }
+                # Add x-axis tick handling for epochs_padding
+                if 'plot_epochs' in data and data['plot_epochs']:
+                    plot_epochs = data['plot_epochs']
+                    tick_locs = [0, 1, 2] + list(range(5, plot_epochs, 5))
+                    tick_labels = [str(i) for i in tick_locs]
+                    axis_updates[xaxis_key].update({
+                        'tickmode': 'array',
+                        'tickvals': tick_locs,
+                        'ticktext': tick_labels,
+                    })
                 axis_updates[yaxis_key] = {
                     **layout['yaxis'],
                     'title': y_label if j == 1 else "",
@@ -572,6 +589,7 @@ def plot_relative_dividends_plotly(
         description=description,
         formula=f"<strong>Relative Dividend =</strong> <code>{formula_text}</code>",
         config=ChartConfig(grid_legend=True),
+        special_case_handler=_relative_dividends_special_case_handler,
     )
 
 
@@ -694,6 +712,34 @@ def _dividends_special_case_handler(layout: dict, case_name: str, data: dict) ->
     # Special case handling for Case 4
     if case_name.startswith("Case 4"):
         layout['yaxis']['range'] = [0, 0.042]
+    
+    # Set custom x-axis ticks to match matplotlib behavior
+    if 'plot_epochs' in data:
+        plot_epochs = data['plot_epochs']
+        tick_locs = [0, 1, 2] + list(range(5, plot_epochs, 5))
+        tick_labels = [str(i) for i in tick_locs]
+        layout['xaxis'].update({
+            'tickmode': 'array',
+            'tickvals': tick_locs,
+            'ticktext': tick_labels,
+        })
+    
+    return layout
+
+
+def _relative_dividends_special_case_handler(layout: dict, case_name: str, data: dict) -> dict:
+    """Special case handler for relative dividends charts"""
+    # Set custom x-axis ticks to match matplotlib behavior
+    if 'plot_epochs' in data:
+        plot_epochs = data['plot_epochs']
+        tick_locs = [0, 1, 2] + list(range(5, plot_epochs, 5))
+        tick_labels = [str(i) for i in tick_locs]
+        layout['xaxis'].update({
+            'tickmode': 'array',
+            'tickvals': tick_locs,
+            'ticktext': tick_labels,
+        })
+    
     return layout
 
 
@@ -704,24 +750,29 @@ def plot_dividends_plotly(
     dividends_per_validator: dict[str, list[float]],
     case_name: str,
     case: BaseCase,
+    epochs_padding: int = 0,
+    show_comparison_in_legend: bool = False,
     **kwargs,
 ) -> str:
     """
     Generates a plotly plot of dividends over epochs for a set of validators.
     """
 
-    data = _prepare_dividends_data(num_epochs, validators, dividends_per_validator, case)
+    data = _prepare_dividends_data(num_epochs, validators, dividends_per_validator, case, epochs_padding, show_comparison_in_legend)
 
     if data is None:
         return '<div class="alert alert-warning">No dividend data to plot.</div>'
 
-    # Create custom config for scientific notation and x-shifting
+    # Get description and formula
+    description, _, formula_text = _get_dividends_description_and_formula()
+
+    # Create custom config - fix scientific notation by using fixed format
     config = ChartConfig(
         height=500,
         legend_horizontal=True,
         grid_legend=True,
         y_axis_format="auto",
-        y_axis_range=(0, None),  # Start from zero
+        y_axis_range=(0, None),
         enable_x_shift=True,
         x_shift_delta=0.05,
     )
@@ -730,7 +781,10 @@ def plot_dividends_plotly(
         data=data,
         case=case,
         case_name=case_name,
+        title="Validator Dividends",  # Add bold title
         y_label="Dividend per 1,000 TAO per Epoch",
+        description=description,  # Add description
+        formula=f"<strong>Dividend =</strong> <code>{formula_text}</code>",  # Add formula
         config=config,
         special_case_handler=_dividends_special_case_handler
     )

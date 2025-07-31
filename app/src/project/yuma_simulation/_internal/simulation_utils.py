@@ -229,15 +229,15 @@ def _run_dynamic_simulation(
             )
 
         bonds_per_epoch.append(b)
-
+        
+        S_norm = S / S.sum()
         dividends_this_epoch = _compute_dividends_for_epoch(
             D_normalized=D_normalized,
-            S=S,
+            S=S_norm,
             yuma_config=yuma_config,
             validators_list=current_validators,
         )
 
-        S_norm = S / S.sum()
         relative_dividends_this_epoch: dict[str, float] = {}
         for i, validator in enumerate(current_validators):
             relative_dividends_this_epoch[validator] = D_normalized[i].item() - S_norm[i].item()

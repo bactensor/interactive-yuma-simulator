@@ -7,6 +7,7 @@ import textwrap
 import numpy as np
 import io
 import base64
+import logging
 
 from matplotlib.axes import Axes
 from matplotlib.ticker import FuncFormatter
@@ -37,6 +38,7 @@ from project.yuma_simulation._internal.charts_data import (
     _compute_mean,
 )
 
+logger = logging.getLogger(__name__)
 
 def _set_default_xticks(ax: Axes, num_epochs: int) -> None:
     tick_locs = [0, 1, 2] + list(range(5, num_epochs, 5))
@@ -519,6 +521,8 @@ def _plot_dividends_matplotlib(
     case_name: str,
     case: BaseCase,
     to_base64: bool = False,
+    epochs_padding: int = 0,
+    show_comparison_in_legend: bool = False,
 ) -> str | None:
     """
     Generates a matplotlib plot of dividends over epochs for a set of validators.
@@ -526,7 +530,7 @@ def _plot_dividends_matplotlib(
     import matplotlib.pyplot as plt
     from matplotlib.ticker import ScalarFormatter
 
-    data = _prepare_dividends_data(num_epochs, validators, dividends_per_validator, case)
+    data = _prepare_dividends_data(num_epochs, validators, dividends_per_validator, case, epochs_padding, show_comparison_in_legend)
 
     if data is None:
         return None
@@ -553,8 +557,7 @@ def _plot_dividends_matplotlib(
             linestyle=linestyle,
         )
 
-    if data['num_epochs_calculated'] is not None:
-        _set_default_xticks(ax_main, data['num_epochs_calculated'])
+    _set_default_xticks(ax_main, data['plot_epochs'])
 
     ax_main.set_xlabel("Time (Epochs)")
     ax_main.set_ylim(bottom=0)
