@@ -2,6 +2,7 @@ import math
 import json
 import textwrap
 import uuid
+import logging
 
 import numpy as np
 import plotly.graph_objects as go
@@ -12,6 +13,7 @@ import torch
 
 from project.yuma_simulation._internal.cases import BaseCase, MetagraphCase
 
+logger = logging.getLogger(__name__)
 
 def _get_validator_styles(
     validators: list[str],
@@ -108,6 +110,25 @@ def _get_relative_dividends_description_and_formula():
 
     formula_text = "(Validator's Dividends / Σ Dividends) - (Validator's Stake / Σ Stake)"
 
+    return description, formula_latex, formula_text
+
+
+def _get_dividends_description_and_formula():
+    """Get the description and formula for dividends."""
+    description = (
+        "'Validator Dividends' measures the dividend rewards earned per 1,000 TAO staked "
+        "by each validator per epoch. This metric normalizes rewards by stake size, allowing "
+        "direct comparison of validator performance. The calculation uses the validator's "
+        "normalized dividend share, the emission ratio for validators (typically 0.41), "
+        "and the total epoch emissions to determine rewards per unit stake."
+    )
+    
+    formula_latex = (
+        r"$\dfrac{\text{Emission Ratio} \times \text{Normalized Dividend} \times \text{Total Epoch Emission}}{\text{Validator's Stake (TAO)} / 1000}$"
+    )
+    
+    formula_text = "(Emission Ratio × Normalized Dividend × Total Epoch Emission) / (Validator's Stake (TAO) / 1000)"
+    
     return description, formula_latex, formula_text
 
 
@@ -404,13 +425,15 @@ def _calculate_total_dividends(
     total_dividends: dict[str, float] = {}
     for validator in validators:
         divs: list[float] = dividends_per_validator.get(validator, [])
-        total_dividend = sum(divs[:num_epochs])
+        # Filter out NaN values before summing
+        valid_divs = [d for d in divs[:num_epochs] if not np.isnan(d)]
+        total_dividend = sum(valid_divs) if valid_divs else np.nan
         total_dividends[validator] = total_dividend
 
     base_dividend = total_dividends.get(base_validator, None)
-    if base_dividend is None or base_dividend == 0.0:
+    if base_dividend is None or base_dividend == 0.0 or np.isnan(base_dividend):
         logger.warning(
-            f"Warning: Base validator '{base_validator}' has zero or missing total dividends."
+            f"Warning: Base validator '{base_validator}' has zero, missing, or NaN total dividends."
         )
         base_dividend = 1e-6
 
@@ -418,6 +441,8 @@ def _calculate_total_dividends(
     for validator, total_dividend in total_dividends.items():
         if validator == base_validator:
             percentage_diff_vs_base[validator] = 0.0
+        elif np.isnan(total_dividend):
+            percentage_diff_vs_base[validator] = np.nan
         else:
             percentage_diff = ((total_dividend - base_dividend) / base_dividend) * 100.0
             percentage_diff_vs_base[validator] = percentage_diff
@@ -430,6 +455,8 @@ def _prepare_dividends_data(
     validators: list[str],
     dividends_per_validator: dict[str, list[float]],
     case: BaseCase,
+    epochs_padding: int = 0,
+    show_comparison_in_legend: bool = True,
 ) -> dict | None:
     """
     Prepare common data for dividends plotting.
@@ -437,6 +464,11 @@ def _prepare_dividends_data(
     Returns:
         dict with plotting data or None if nothing to plot
     """
+
+    plot_epochs = num_epochs - epochs_padding
+    if plot_epochs <= 0 or not dividends_per_validator:
+        logger.warning("Nothing to plot (padding ≥ epochs or empty data).")
+        return None
 
     top_vals = getattr(case, "requested_validators", [])
     if top_vals:
@@ -448,15 +480,16 @@ def _prepare_dividends_data(
         plot_validator_names.append(case.base_validator)
 
     # Calculate total dividends and percentage differences
+    # Use plot_validator_names to ensure all plotted validators have totals calculated
     total_dividends, percentage_diff_vs_base = _calculate_total_dividends(
-        validators,
+        plot_validator_names,
         dividends_per_validator,
         case.base_validator,
         num_epochs,
     )
 
-    num_epochs_calculated = None
-    x = None
+    # Set x based on plot_epochs instead of num_epochs
+    x = np.arange(plot_epochs)
     series_data = []
 
     for idx, validator in enumerate(plot_validator_names):
@@ -466,9 +499,12 @@ def _prepare_dividends_data(
         dividends = dividends_per_validator[validator]
         dividends_array = np.array(dividends, dtype=float)
 
-        if num_epochs_calculated is None:
-            num_epochs_calculated = len(dividends_array)
-            x = np.arange(num_epochs_calculated)
+        # Skip if series shorter than padding
+        if len(dividends_array) <= epochs_padding:
+            continue
+
+        # Trim off the first epochs_padding epochs and restrict to plot_epochs
+        trimmed = dividends_array[epochs_padding : epochs_padding + plot_epochs]
 
         # Prepare shifted x values for better visibility
         delta = 0.05
@@ -478,12 +514,17 @@ def _prepare_dividends_data(
         total_dividend = total_dividends.get(validator, 0.0)
         percentage_diff = percentage_diff_vs_base.get(validator, 0.0)
 
-        if abs(total_dividend) < 1e-6:
+        # Handle NaN values
+        if np.isnan(total_dividend):
+            total_dividend_str = "nan"
+        elif abs(total_dividend) < 1e-6:
             total_dividend_str = f"{total_dividend:.3e}"
         else:
             total_dividend_str = f"{total_dividend:.6f}"
 
-        if abs(percentage_diff) < 1e-12:
+        if np.isnan(percentage_diff):
+            percentage_str = "(N/A)"
+        elif abs(percentage_diff) < 1e-12:
             percentage_str = "(Base)"
         elif percentage_diff > 0:
             percentage_str = f"(+{percentage_diff:.1f}%)"
@@ -495,11 +536,16 @@ def _prepare_dividends_data(
             display_name = case.hotkey_label_map.get(validator, validator)
         else:
             display_name = validator
-        label = f"{display_name}: Total={total_dividend_str} {percentage_str}"
+        
+        # Format label based on show_comparison_in_legend
+        if show_comparison_in_legend:
+            label = f"{display_name}: Total={total_dividend_str} {percentage_str}"
+        else:
+            label = f"{display_name}: Total={total_dividend_str}"
 
         series_data.append({
             'validator': validator,
-            'data': dividends_array[:num_epochs],
+            'data': trimmed,
             'x_shifted': x_shifted.tolist(),
             'x': x.tolist(),  # Also provide non-shifted version
             'label': label,
@@ -514,7 +560,7 @@ def _prepare_dividends_data(
     return {
         'series_data': series_data,
         'x': x.tolist() if x is not None else [],
-        'num_epochs_calculated': num_epochs_calculated,
+        'plot_epochs': plot_epochs,
         'plot_validator_names': plot_validator_names,
         'total_dividends': total_dividends,
         'percentage_diff_vs_base': percentage_diff_vs_base,
