@@ -121,7 +121,7 @@ def generate_metagraph_based_chart_table(
     incentives_by_version: dict[str, list[torch.Tensor]] = {}
     for version, params in summary_versions:
         config = YumaConfig(simulation=yuma_hyperparameters, yuma_params=params)
-        _, rel_divs, bonds, incentives = _run_dynamic_simulation(
+        _, rel_divs, bonds, incentives, _ = _run_dynamic_simulation(
             case=normal_case,
             yuma_version=version,
             yuma_config=config,
@@ -143,7 +143,7 @@ def generate_metagraph_based_chart_table(
             bonds    = bonds_by_version[version]
             incentives = incentives_by_version[version]
         else:
-            _, rel_divs, bonds, incentives = _run_dynamic_simulation(
+            _, rel_divs, bonds, incentives, _ = _run_dynamic_simulation(
                 case         = normal_case,
                 yuma_version = version,
                 yuma_config  = config,
@@ -234,12 +234,12 @@ def generate_metagraph_based_chart_table_shifted_comparisson(
             normal_case, shifted_case, yuma_version, yuma_config
         )
 
-        _, validators_relative_dividends_normal, bonds_per_epoch, _ = _run_dynamic_simulation(
+        _, validators_relative_dividends_normal, bonds_per_epoch, _, _ = _run_dynamic_simulation(
             case=normal_case,
             yuma_version=yuma_version,
             yuma_config=yuma_config,
         )
-        _, validators_relative_dividends_shifted, _, _ = _run_dynamic_simulation(
+        _, validators_relative_dividends_shifted, _, _, _ = _run_dynamic_simulation(
             case=shifted_case,
             yuma_version=yuma_version,
             yuma_config=yuma_config,

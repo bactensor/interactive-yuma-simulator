@@ -65,13 +65,14 @@ def get_metagraph_session() -> requests.Session:
     return sess
 
 
-def fetch_metagraph_data(
+
+def fetch_metagraph_weights_stakes(
     start_date: datetime,
     end_date: datetime,
     netuid: int,
 ) -> dict:
     sess = get_metagraph_session()
-    url = urljoin(settings.MGRAPH_BASE_URL, "metagraph-data/")
+    url = urljoin(settings.MGRAPH_BASE_URL, "metagraph/weights_stakes/")
     params = {
         "start_date": start_date.isoformat(),
         "end_date": end_date.isoformat(),
@@ -90,7 +91,49 @@ def fetch_metagraph_data(
             err = None
 
         logger.error(
-            "metagraph data fetch failed: %s %s\n"
+            "metagraph weights/stakes fetch failed: %s %s\n"
+            "Response headers:\n%s\n"
+            "Response body (first 500 chars):\n%s\n"
+            "Parsed error: %r",
+            r.status_code,
+            r.reason,
+            headers,
+            body[:500],
+            err,
+        )
+
+        http_err = requests.HTTPError(f"{r.status_code} {r.reason}", response=r)
+        raise http_err
+
+    return r.json()
+
+
+def fetch_metagraph_rewards(
+    start_date: datetime,
+    end_date: datetime,
+    netuid: int,
+) -> dict:
+    sess = get_metagraph_session()
+    url = urljoin(settings.MGRAPH_BASE_URL, "metagraph/rewards/")
+    params = {
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "netuid": netuid,
+    }
+
+    logger.debug("→ GET %s %r", url, params)
+    r = sess.get(url, params=params, timeout=360)
+
+    if not r.ok:
+        headers = dict(r.headers)
+        body = r.text
+        try:
+            err = r.json().get("error")
+        except ValueError:
+            err = None
+
+        logger.error(
+            "metagraph rewards fetch failed: %s %s\n"
             "Response headers:\n%s\n"
             "Response body (first 500 chars):\n%s\n"
             "Parsed error: %r",

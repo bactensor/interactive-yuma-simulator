@@ -5,6 +5,7 @@ from typing import Any, Optional, Dict, List, Tuple
 import logging
 from .metagraph_utils import (
     slot_count, build_S_tensor, build_W_tensor,
+    build_bonds_tensor, build_dividends_tensor, build_incentives_tensor,
     pick_validators, run_block_diagnostics,
 )
 import random
@@ -184,6 +185,9 @@ class MetagraphCase(BaseCase):
         hotkeys_by_blk  = {int(k): v for k, v in mg_data["hotkeys"].items()}
         weights         = mg_data["weights"]
         stakes          = mg_data["stakes"]
+        bonds           = mg_data.get("bonds", {})
+        dividends       = mg_data.get("dividends", {})
+        incentives      = mg_data.get("incentives", {})
         n_slots         = slot_count(hotkeys_by_blk)
 
         requested_validators = pick_validators(hotkeys_by_blk=hotkeys_by_blk, stakes=stakes)
@@ -196,11 +200,18 @@ class MetagraphCase(BaseCase):
             requested_miners = [hk for hk in requested_miners if hk in all_hks]
 
         # choose diagnostics blocks
-        diag_blocks = set(random.sample(blocks, min(10, len(blocks))))
+        # Always include first two epochs for bonds diagnostics
+        diag_blocks = set(blocks[:2]) if len(blocks) >= 2 else set(blocks[:1])
+        # Add random samples for remaining slots
+        remaining_blocks = blocks[2:] if len(blocks) > 2 else []
+        if remaining_blocks and len(diag_blocks) < 10:
+            additional_samples = min(10 - len(diag_blocks), len(remaining_blocks))
+            diag_blocks.update(random.sample(remaining_blocks, additional_samples))
         diagnostics_enabled = getattr(settings, "ENABLE_METAGRAPH_DIAGNOSTICS", False)
+        logger.info(f"Metagraph diagnostics enabled: {diagnostics_enabled}")
 
         metas: List[Dict[str, Any]] = []
-        for block in blocks:
+        for idx, block in enumerate(blocks):
             S = build_S_tensor(stakes[str(block)], n_slots)
             W = build_W_tensor(weights[str(block)], n_slots)
 
@@ -222,7 +233,18 @@ class MetagraphCase(BaseCase):
             if diagnostics_enabled and block in diag_blocks:
                 run_block_diagnostics(block, mg_data["netuid"], S, W, hk)
 
-            metas.append({"S": S, "W": W, "hotkeys": hk})
+            meta_dict = {"S": S, "W": W, "hotkeys": hk}
+            
+            # Add bonds, dividends, and incentives for all epochs where data is available
+            block_str = str(block)
+            if block_str in bonds:
+                meta_dict["bonds"] = build_bonds_tensor(bonds[block_str], n_slots)
+            if block_str in dividends:
+                meta_dict["dividends"] = build_dividends_tensor(dividends[block_str], n_slots)
+            if block_str in incentives:
+                meta_dict["incentives"] = build_incentives_tensor(incentives[block_str], n_slots)
+            
+            metas.append(meta_dict)
 
         case = cls(
             metas=metas,
@@ -313,6 +335,67 @@ class MetagraphCase(BaseCase):
         df_stakes.index.name = "epoch"
         df_stakes = df_stakes.div(df_stakes.sum(axis=1), axis=0)
         return df_stakes
+
+    @property
+    def bonds_epochs(self) -> list[Optional[torch.Tensor]]:
+        """
+        Return a list of bonds matrices (one per epoch) that have been filtered according
+        to that epoch's valid (validators) and miner indices. Only available for first two epochs.
+        Returns None for epochs without bonds data.
+        """
+        bonds = []
+        for i, meta in enumerate(self.metas):
+            if "bonds" in meta:
+                B_full = meta["bonds"]
+                valid_indices = self.valid_indices_epochs[i]
+                miner_indices = self.miner_indices_epochs[i]
+                # Filter rows (validators) and columns (miners)
+                B_valid = B_full[valid_indices, :][:, miner_indices]
+                # Normalize from 16-bit fixed point to [0,1]
+                B_valid = B_valid / 65535.0
+                # Column-normalize over the filtered validator set to sum to 1
+                col_sums = B_valid.sum(dim=0)
+                B_valid = B_valid / (col_sums + 1e-6)
+                B_valid = torch.nan_to_num(B_valid)
+                bonds.append(B_valid)
+            else:
+                bonds.append(None)
+        return bonds
+
+    @property
+    def dividends_epochs(self) -> list[Optional[torch.Tensor]]:
+        """
+        Return a list of dividends tensors (one per epoch) filtered to include only the valid
+        validators. Only available for first two epochs. Returns None for epochs without dividends data.
+        """
+        dividends = []
+        for i, meta in enumerate(self.metas):
+            if "dividends" in meta:
+                D_full = meta["dividends"]
+                valid_indices = self.valid_indices_epochs[i]
+                D_valid = D_full[valid_indices]
+                dividends.append(D_valid)
+            else:
+                dividends.append(None)
+        return dividends
+
+    @property
+    def incentives_epochs(self) -> list[Optional[torch.Tensor]]:
+        """
+        Return a list of incentives tensors (one per epoch) filtered to active miners only.
+        Only available for first two epochs. Returns None for epochs without incentives data.
+        """
+        incentives = []
+        for i, meta in enumerate(self.metas):
+            if "incentives" in meta:
+                I_full = meta["incentives"]
+                miner_indices = self.miner_indices_epochs[i]
+                # Filter to active miners only
+                I_miners = I_full[miner_indices]
+                incentives.append(I_miners)
+            else:
+                incentives.append(None)
+        return incentives
 
 
 def create_case(case_name: str, **kwargs) -> BaseCase:

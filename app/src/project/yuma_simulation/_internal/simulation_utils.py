@@ -126,11 +126,19 @@ def _run_dynamic_simulation(
     """
     dividends_per_epoch: list[dict[str, float]] = []
     relative_dividends_per_epoch: list[dict[str, float]] = []
+    normalized_dividends_per_epoch: list[dict[str, float]] = []  # Raw D_normalized values
     bonds_per_epoch: list[torch.Tensor] = []
     hotkeys_incentive_over_epochs: dict[str, list[float]] = {}
 
     # These states are passed between epochs.
-    B_state: torch.Tensor | None = None
+    # Initialize B_state with bonds from first epoch if available
+    # bonds_epochs already returns normalized and column-normalized bonds for the filtered set
+    B_state: torch.Tensor | None = (
+        case.bonds_epochs[0].clone()
+        if hasattr(case, 'bonds_epochs') and case.bonds_epochs[0] is not None 
+        else None
+    )
+    
     C_state: torch.Tensor | None = None
     W_prev: torch.Tensor | None = None
     server_consensus_weight: torch.Tensor | None = None
@@ -214,8 +222,15 @@ def _run_dynamic_simulation(
             case=case,
             yuma_config=yuma_config
         )
+        
 
         D_normalized: torch.Tensor = simulation_results["validator_reward_normalized"]
+        
+        # Store raw D_normalized values for validation purposes
+        raw_normalized_dividends_this_epoch = {}
+        for idx, validator in enumerate(current_validators):
+            raw_normalized_dividends_this_epoch[validator] = D_normalized[idx].item()
+        normalized_dividends_per_epoch.append(raw_normalized_dividends_this_epoch)
 
         b = B_state.clone()
         i = simulation_results["server_incentive"].clone()
@@ -234,6 +249,12 @@ def _run_dynamic_simulation(
             D_normalized=D_normalized,
             S=S,
             yuma_config=yuma_config,
+            validators_list=current_validators,
+        )
+        
+        # Also store raw normalized dividends (D_normalized values) for comparison with blockchain data
+        normalized_dividends_this_epoch = _compute_normalized_dividends_for_epoch(
+            D_normalized=D_normalized,
             validators_list=current_validators,
         )
 
@@ -270,8 +291,9 @@ def _run_dynamic_simulation(
     # Merge the per-epoch dictionaries
     merged_dividends = pd.DataFrame(dividends_per_epoch).to_dict(orient="list")
     merged_relative_dividends = pd.DataFrame(relative_dividends_per_epoch).to_dict(orient="list")
+    merged_normalized_dividends = pd.DataFrame(normalized_dividends_per_epoch).to_dict(orient="list")
 
-    return (merged_dividends, merged_relative_dividends, bonds_per_epoch, hotkeys_incentive_over_epochs)
+    return (merged_dividends, merged_relative_dividends, bonds_per_epoch, hotkeys_incentive_over_epochs, merged_normalized_dividends)
 
 def _call_yuma(
     epoch: int,
@@ -466,6 +488,20 @@ def _compute_dividends_for_epoch(
     return dividends_this_epoch
 
 
+def _compute_normalized_dividends_for_epoch(
+    D_normalized: torch.Tensor,
+    validators_list: list[str],
+) -> dict[str, float]:
+    """
+    Computes a dictionary mapping each validator (by name) to its raw normalized reward (D_normalized value) for the current epoch.
+    This returns the raw consensus rewards without any stake-based dividend calculations.
+    """
+    normalized_dividends_this_epoch = {}
+    for i, validator in enumerate(validators_list):
+        normalized_dividends_this_epoch[validator] = D_normalized[i].item()
+    return normalized_dividends_this_epoch
+
+
 def _align_bond_state(
     B_state: torch.Tensor,
     current_validators: list[str],
@@ -478,7 +514,16 @@ def _align_bond_state(
     and miner indices. Returns a new bond state tensor with shape
       (len(current_validators), len(current_miner_indices)),
     copying over any overlapping entries from the old bond state.
+    
+    Special case: If old_validators/old_miner_indices are empty (epoch 0),
+    preserve the existing B_state if it already has the correct shape.
     """
+
+    # Special case: if no old validators/miners (epoch 0 with initial bonds)
+    # and B_state already has the correct shape, return it unchanged
+    expected_shape = (len(current_validators), len(current_miner_indices))
+    if not old_validators and not old_miner_indices and B_state.shape == expected_shape:
+        return B_state
 
     # Create mapping dictionaries for O(1) lookups
     old_validator_map = {validator: i for i, validator in enumerate(old_validators)}
