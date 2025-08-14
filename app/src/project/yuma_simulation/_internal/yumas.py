@@ -750,7 +750,7 @@ def Yuma3(
     B = torch.clamp(B, max=1.0)
 
     # === Dividends Calculation ===
-    B_norm = B / (B.sum(dim=0, keepdim=True) + 1e-6) # Normalized Bonds only for Dividends calculations purpose
+    B_norm = B / (B.sum(dim=0, keepdim=True) + 1e-9)  # Use moderately smaller epsilon # Normalized Bonds only for Dividends calculations purpose
     total_bonds_per_validator = (B_norm * I).sum(dim=1)  # Sum over miners for each validator
     D = S * total_bonds_per_validator  # Element-wise multiplication
 

@@ -73,20 +73,28 @@ def create_diagnostic_artifacts(
     artifact_dir = Path(f"validation_artifacts/{timestamp}_subnet_{netuid}")
     artifact_dir.mkdir(parents=True, exist_ok=True)
     
+    # Extract starting block from validation results for metadata
+    starting_block = validation_results.get('blocks_tested', [None])[0] 
+    blocks_tested = validation_results.get('blocks_tested', [])
+    
     diagnostics = {
         "metadata": {
             "netuid": netuid,
-            "timestamp": timestamp,
-            "validation_date": datetime.now().isoformat(),
+            "starting_block": starting_block,
+            "blocks_tested": blocks_tested, 
             "tolerance_used": tolerance
         },
         "config": {
             "bond_penalty": getattr(yuma_config, "bond_penalty", None) if yuma_config else None,
-            "bond_moving_avg": getattr(yuma_config, "bond_moving_avg", None) if yuma_config else None,
-            "kappa": getattr(yuma_config, "kappa", None) if yuma_config else None,
+            "bonds_moving_avg": getattr(yuma_config, "bonds_moving_avg", None) if yuma_config else None,
+            "liquid_alpha_enabled": getattr(yuma_config, "liquid_alpha_enabled", None) if yuma_config else None,
+            "commit_reveal_weights_enabled": getattr(yuma_config, "commit_reveal_weights_enabled", None) if yuma_config else None,
             "alpha_high": getattr(yuma_config, "alpha_high", None) if yuma_config else None,
             "alpha_low": getattr(yuma_config, "alpha_low", None) if yuma_config else None,
+            "kappa": getattr(yuma_config, "kappa", None) if yuma_config else None,
             "liquid_alpha": getattr(yuma_config, "liquid_alpha", None) if yuma_config else None,
+            "rho": getattr(yuma_config, "rho", None) if yuma_config else None,
+            "max_weight_limit": getattr(yuma_config, "max_weight_limit", None) if yuma_config else None,
         },
         "bond_divergences": [],
         "dividend_divergences": [],
@@ -128,298 +136,69 @@ def create_diagnostic_artifacts(
         diagnostics["bond_divergences"] = bond_divergences
         logger.info(f"Found {len(bond_divergences)} bond divergences for analysis")
 
-        # Add a single deep-dive snapshot of all votes towards one miner (target_uid)
-        try:
-            if bond_divergences:
-                target_uid = bond_divergences[0].get("target_uid")
-                # Extract full weights column for target_uid from dumper for the epoch under test
-                if last_epoch_idx < len(case.metas) and "W" in case.metas[last_epoch_idx]:
-                    W_full = case.metas[last_epoch_idx]["W"]  # [256, 256]
-                    hotkeys_full = case.metas[last_epoch_idx].get("hotkeys", [])
-                    if isinstance(W_full, torch.Tensor) and 0 <= target_uid < W_full.shape[1]:
-                        # Full column of votes towards target_uid
-                        col_full = W_full[:, target_uid].clone().detach().cpu().tolist()
+        # Generate bond evolution report for the most divergent validator-miner pair
+        if bond_divergences:
+            max_divergence = bond_divergences[0]  # Already sorted by difference
+            max_validator_uid = max_divergence['validator_uid']
+            max_target_uid = max_divergence['target_uid']
+            
+            bond_report = create_bond_evolution_report(
+                case=case,
+                sim_bonds=sim_bonds,
+                target_miner_uid=max_target_uid,
+                focus_validator_uid=max_validator_uid,
+                netuid=netuid,
+                tested_blocks=blocks_tested
+            )
+            
+            # Save the bond evolution report
+            bond_report_path = artifact_dir / "bond_evolution_report.json"
+            with open(bond_report_path, 'w') as f:
+                json.dump(bond_report, f, indent=2)
+            
+            # Generate human-readable summary
+            summary_path = artifact_dir / "bond_evolution_summary.txt"
+            with open(summary_path, 'w') as f:
+                f.write("BOND EVOLUTION TRACKING REPORT\n")
+                f.write("=" * 80 + "\n\n")
+                f.write(f"Target Miner: UID {max_target_uid}\n")
+                f.write(f"Focus Validator: UID {max_validator_uid}\n")
+                f.write(f"Network: {netuid}\n\n")
+                
+                # Process each epoch
+                for epoch_data in bond_report['epochs']:
+                    f.write(f"\n--- EPOCH {epoch_data['epoch']} ---\n\n")
+                    
+                    # Find focus validator data
+                    focus_key = f"uid_{max_validator_uid}"
+                    if focus_key in epoch_data['validators']:
+                        focus_val = epoch_data['validators'][focus_key]
+                        f.write(f"Focus Validator (UID {max_validator_uid}):\n")
+                        f.write(f"  Weight: {focus_val['weights']['value']}\n")
+                        f.write(f"  Stake: {focus_val['stake']}\n")
+                        f.write(f"  Bonds:\n")
+                        f.write(f"    Simulated: {focus_val['bonds']['simulated']}\n")
+                        f.write(f"    Real (raw): {focus_val['bonds']['real_raw']}\n")
+                        f.write(f"    Real (normalized): {focus_val['bonds']['real_normalized']}\n")
+                        f.write(f"    Real (col sum): {focus_val['bonds']['real_col_sum']}\n\n")
+                    
+                    # All validators summary
+                    f.write(f"All validators → UID {max_target_uid}:\n")
+                    for val_key, val_data in epoch_data['validators'].items():
+                        uid = val_data['validator_uid']
+                        if uid != max_validator_uid:  # Skip focus validator as we already showed it
+                            sim_bond = val_data['bonds']['simulated']
+                            real_bond = val_data['bonds']['real_col_sum']
+                            weight = val_data['weights']['value']
+                            f.write(f"  UID {uid:3d}: sim={sim_bond:7.4f}, real={real_bond:7.4f}, weight={weight}\n")
+                    
+                    # Epoch summary
+                    f.write(f"\nSummary:\n")
+                    f.write(f"  Total sim bonds to target: {epoch_data['summary']['sim_bonds_to_target_sum']}\n")
+                    f.write(f"  Non-zero bonds to target: {epoch_data['summary']['sim_bonds_to_target_nonzero']}\n")
+            
+            logger.info(f"Generated bond evolution report for validator {max_validator_uid} → miner {max_target_uid}")
 
-                        # Also include simulator-fed column (filtered to validators/miners for this epoch) when available
-                        sim_col = None
-                        try:
-                            if last_epoch_idx < len(case.weights_epochs):
-                                W_sim = case.weights_epochs[last_epoch_idx]  # [num_validators, num_miners_active]
-                                miner_indices = case.miner_indices_epochs[last_epoch_idx]
-                                if target_uid in miner_indices:
-                                    col_idx = miner_indices.index(target_uid)
-                                    sim_col = W_sim[:, col_idx].clone().detach().cpu().tolist()
-                        except Exception as e:
-                            logger.warning(f"Failed extracting simulator-fed weights column for UID {target_uid}: {e}")
-
-                        diagnostics["selected_miner_weights"] = {
-                            "epoch_idx": last_epoch_idx,
-                            "target_uid": target_uid,
-                            "target_hotkey": hotkeys_full[target_uid] if hotkeys_full and target_uid < len(hotkeys_full) else None,
-                            "weights_full_column": col_full,
-                            "validators_indices": case.valid_indices_epochs[last_epoch_idx] if len(case.valid_indices_epochs) > last_epoch_idx else [],
-                            "miners_indices": case.miner_indices_epochs[last_epoch_idx] if len(case.miner_indices_epochs) > last_epoch_idx else [],
-                            "simulator_fed_column": sim_col,
-                        }
-                        logger.info(f"Added selected miner weights snapshot for UID {target_uid}")
-
-                        # Bonds deep dive for the same target miner
-                        try:
-                            # Gather epoch-specific structures
-                            validators_epoch = case.validators_epochs[last_epoch_idx] if len(case.validators_epochs) > last_epoch_idx else []
-                            epoch_hotkeys = case.metas[last_epoch_idx].get("hotkeys", [])
-                            miner_indices = case.miner_indices_epochs[last_epoch_idx] if len(case.miner_indices_epochs) > last_epoch_idx else []
-
-                            # Map filtered validator rows to UIDs in the full matrix
-                            validator_positions = []
-                            for vh in validators_epoch:
-                                try:
-                                    validator_positions.append(epoch_hotkeys.index(vh))
-                                except ValueError:
-                                    validator_positions.append(-1)
-
-                            # Real bonds normalized (filtered validator rows, all 256 miners) to mirror compare_bonds
-                            real_bonds_full = case.metas[last_epoch_idx].get("bonds")
-                            real_bonds_col_norm = None
-                            if isinstance(real_bonds_full, torch.Tensor) and len(validator_positions) > 0 and target_uid is not None:
-                                vp = [p for p in validator_positions if p >= 0]
-                                if vp:
-                                    real_bonds_epoch = real_bonds_full[vp, :]  # [num_validators, 256]
-                                    rb_norm = real_bonds_epoch / 65535.0
-                                    rb_col_sums = rb_norm.sum(dim=0)
-                                    rb_norm = rb_norm / (rb_col_sums + 1e-6)
-                                    real_bonds_col_norm = rb_norm[:, target_uid].clone().detach().cpu().tolist()
-
-                            # Simulator bonds column (last epoch)
-                            sim_col_bonds = None
-                            if sim_bonds and miner_indices and target_uid in miner_indices:
-                                last_sim_B = sim_bonds[-1]
-                                try:
-                                    col_idx = miner_indices.index(target_uid)
-                                    sim_col_bonds = last_sim_B[:, col_idx].clone().detach().cpu().tolist()
-                                except Exception as e:
-                                    logger.warning(f"Failed extracting sim bonds column for UID {target_uid}: {e}")
-
-                            # Previous epoch bonds aligned to current validator order (for EMA insight)
-                            prev_sim_col_bonds_aligned = None
-                            prev_col_idx = None
-                            if len(sim_bonds) > 1 and last_epoch_idx > 0:
-                                prev_sim_B = sim_bonds[-2]
-                                prev_validators = case.validators_epochs[last_epoch_idx - 1]
-                                prev_miner_indices = case.miner_indices_epochs[last_epoch_idx - 1]
-                                if target_uid in prev_miner_indices:
-                                    prev_col_idx = prev_miner_indices.index(target_uid)
-                                    # Build mapping from prev validators to index
-                                    prev_map = {hk: i for i, hk in enumerate(prev_validators)}
-                                    aligned = []
-                                    for hk in validators_epoch:
-                                        j = prev_map.get(hk, None)
-                                        if j is None:
-                                            aligned.append(0.0)
-                                        else:
-                                            aligned.append(float(prev_sim_B[j, prev_col_idx].item()))
-                                    prev_sim_col_bonds_aligned = aligned
-
-                            bonds_snapshot = {
-                                "epoch_idx": last_epoch_idx,
-                                "target_uid": target_uid,
-                                "target_hotkey": hotkeys_full[target_uid] if hotkeys_full and target_uid < len(hotkeys_full) else None,
-                                "real_bonds_column_normalized": real_bonds_col_norm,
-                                "sim_bonds_column": sim_col_bonds,
-                                "prev_sim_bonds_column_aligned": prev_sim_col_bonds_aligned,
-                                "mapping": {
-                                    "validators_hotkeys": validators_epoch,
-                                    "validator_uids": [p for p in validator_positions],
-                                    "miner_indices": miner_indices,
-                                    "sim_col_idx": miner_indices.index(target_uid) if miner_indices and (target_uid in miner_indices) else None,
-                                    "prev_miner_indices": case.miner_indices_epochs[last_epoch_idx - 1] if last_epoch_idx > 0 else None,
-                                    "prev_sim_col_idx": prev_col_idx,
-                                }
-                            }
-
-                            # Optional: recompute intermediates for last epoch to expose internal values
-                            if yuma_config is not None and last_epoch_idx < len(case.weights_epochs) and last_epoch_idx < len(case.stakes_epochs):
-                                try:
-                                    W_sim_epoch = case.weights_epochs[last_epoch_idx]
-                                    S_sim_epoch = case.stakes_epochs[last_epoch_idx]
-
-                                    # Align previous full bond matrix to current shape if available
-                                    B_old_aligned = None
-                                    if len(sim_bonds) > 1 and last_epoch_idx > 0:
-                                        prev_sim_B_full = sim_bonds[-2]
-                                        # Align rows (validators)
-                                        prev_validators = case.validators_epochs[last_epoch_idx - 1]
-                                        prev_map = {hk: i for i, hk in enumerate(prev_validators)}
-                                        curr_v = validators_epoch
-                                        # Align columns (miners)
-                                        prev_m = case.miner_indices_epochs[last_epoch_idx - 1]
-                                        curr_m = miner_indices
-                                        B_old_aligned = torch.zeros((len(curr_v), len(curr_m)), dtype=prev_sim_B_full.dtype)
-                                        for i, hk in enumerate(curr_v):
-                                            ri = prev_map.get(hk, None)
-                                            if ri is None:
-                                                continue
-                                            for j, uid in enumerate(curr_m):
-                                                try:
-                                                    cj = prev_m.index(uid)
-                                                except ValueError:
-                                                    continue
-                                                B_old_aligned[i, j] = prev_sim_B_full[ri, cj]
-
-                                    yres = YumaSubtensor(
-                                        W=W_sim_epoch,
-                                        S=S_sim_epoch,
-                                        num_servers=len(miner_indices),
-                                        num_validators=len(validators_epoch),
-                                        use_full_matrices=False,
-                                        B_old=B_old_aligned,
-                                        C_old=None,
-                                        config=yuma_config,
-                                    )
-                                    # Extract intermediates columns for target
-                                    inter = {}
-                                    if target_uid in miner_indices:
-                                        cidx = miner_indices.index(target_uid)
-                                        inter = {
-                                            "W_norm_col": yres["weight"][:, cidx].clone().detach().cpu().tolist(),
-                                            "W_clipped_col": yres["consensus_clipped_weight"][:, cidx].clone().detach().cpu().tolist(),
-                                            "B_col": yres["validator_bond"][:, cidx].clone().detach().cpu().tolist(),
-                                            "B_ema_col": yres["validator_ema_bond"][:, cidx].clone().detach().cpu().tolist(),
-                                            "C_value": float(yres["server_consensus_weight"][cidx].item()),
-                                        }
-                                    bonds_snapshot["intermediates"] = inter
-                                except Exception as e:
-                                    logger.warning(f"Failed to compute intermediates snapshot: {e}")
-
-                            diagnostics["selected_miner_bonds"] = bonds_snapshot
-                            logger.info(f"Added selected miner bonds snapshot for UID {target_uid}")
-                        except Exception as e:
-                            logger.warning(f"Failed to add selected miner bonds snapshot: {e}")
-        except Exception as e:
-            logger.warning(f"Failed to add selected miner weights snapshot: {e}")
-
-        # Forced deep-dive for UID 24 (common diverging miner) regardless of top divergence
-        try:
-            forced_uid = 24
-            if last_epoch_idx < len(case.metas) and "W" in case.metas[last_epoch_idx]:
-                W_full = case.metas[last_epoch_idx]["W"]
-                hotkeys_full = case.metas[last_epoch_idx].get("hotkeys", [])
-                if isinstance(W_full, torch.Tensor) and 0 <= forced_uid < W_full.shape[1]:
-                    # Weights snapshot for UID 24
-                    w_col_full = W_full[:, forced_uid].clone().detach().cpu().tolist()
-                    sim_col_forced = None
-                    try:
-                        W_sim = case.weights_epochs[last_epoch_idx]
-                        miner_indices = case.miner_indices_epochs[last_epoch_idx]
-                        if forced_uid in miner_indices:
-                            fidx = miner_indices.index(forced_uid)
-                            sim_col_forced = W_sim[:, fidx].clone().detach().cpu().tolist()
-                    except Exception:
-                        pass
-                    diagnostics["selected_miner_weights_uid_24"] = {
-                        "epoch_idx": last_epoch_idx,
-                        "target_uid": forced_uid,
-                        "target_hotkey": hotkeys_full[forced_uid] if hotkeys_full and forced_uid < len(hotkeys_full) else None,
-                        "weights_full_column": w_col_full,
-                        "validators_indices": case.valid_indices_epochs[last_epoch_idx] if len(case.valid_indices_epochs) > last_epoch_idx else [],
-                        "miners_indices": case.miner_indices_epochs[last_epoch_idx] if len(case.miner_indices_epochs) > last_epoch_idx else [],
-                        "simulator_fed_column": sim_col_forced,
-                    }
-
-                    # Bonds snapshot for UID 24 including sums and alpha
-                    validators_epoch = case.validators_epochs[last_epoch_idx] if len(case.validators_epochs) > last_epoch_idx else []
-                    epoch_hotkeys = case.metas[last_epoch_idx].get("hotkeys", [])
-                    miner_indices = case.miner_indices_epochs[last_epoch_idx] if len(case.miner_indices_epochs) > last_epoch_idx else []
-                    validator_positions = []
-                    for vh in validators_epoch:
-                        try:
-                            validator_positions.append(epoch_hotkeys.index(vh))
-                        except ValueError:
-                            validator_positions.append(-1)
-                    real_bonds_full = case.metas[last_epoch_idx].get("bonds")
-                    real_col_norm = None
-                    real_col_sum_pre = None
-                    real_col_sum_post = None
-                    if isinstance(real_bonds_full, torch.Tensor):
-                        vp = [p for p in validator_positions if p >= 0]
-                        if vp:
-                            real_epoch = real_bonds_full[vp, :]
-                            rb_pre = (real_epoch[:, forced_uid] / 65535.0)
-                            real_col_sum_pre = float(rb_pre.sum().item())
-                            rb_norm = real_epoch / 65535.0
-                            rb_col_sums = rb_norm.sum(dim=0)
-                            rb_norm = rb_norm / (rb_col_sums + 1e-6)
-                            rb_norm = torch.nan_to_num(rb_norm)
-                            real_col_norm = rb_norm[:, forced_uid].clone().detach().cpu().tolist()
-                            real_col_sum_post = float(rb_norm[:, forced_uid].sum().item())
-
-                    sim_col_b = None
-                    sim_col_b_sum = None
-                    sim_col_b_ema = None
-                    sim_col_b_ema_sum = None
-                    alpha_used = None
-                    inter = {}
-                    if sim_bonds and miner_indices and forced_uid in miner_indices:
-                        last_sim_B = sim_bonds[-1]
-                        fidx = miner_indices.index(forced_uid)
-                        sim_col_b = last_sim_B[:, fidx].clone().detach().cpu().tolist()
-                        sim_col_b_sum = float(last_sim_B[:, fidx].sum().item())
-
-                    if yuma_config is not None and last_epoch_idx < len(case.weights_epochs) and last_epoch_idx < len(case.stakes_epochs) and forced_uid in miner_indices:
-                        try:
-                            W_sim_epoch = case.weights_epochs[last_epoch_idx]
-                            S_sim_epoch = case.stakes_epochs[last_epoch_idx]
-                            yres = YumaSubtensor(
-                                W=W_sim_epoch,
-                                S=S_sim_epoch,
-                                num_servers=len(miner_indices),
-                                num_validators=len(validators_epoch),
-                                use_full_matrices=False,
-                                B_old=None,
-                                C_old=None,
-                                config=yuma_config,
-                            )
-                            cidx = miner_indices.index(forced_uid)
-                            inter = {
-                                "W_norm_col": yres["weight"][:, cidx].clone().detach().cpu().tolist(),
-                                "W_clipped_col": yres["consensus_clipped_weight"][:, cidx].clone().detach().cpu().tolist(),
-                                "B_col": yres["validator_bond"][:, cidx].clone().detach().cpu().tolist(),
-                                "B_ema_col": yres["validator_ema_bond"][:, cidx].clone().detach().cpu().tolist(),
-                                "C_value": float(yres["server_consensus_weight"][cidx].item()),
-                            }
-                            sim_col_b_ema = inter.get("B_ema_col")
-                            if sim_col_b_ema is not None:
-                                sim_col_b_ema_sum = float(sum(sim_col_b_ema))
-                            alpha_used = float(yres.get("alpha", yres.get("bond_alpha", float('nan'))))
-                        except Exception:
-                            pass
-
-                    diagnostics["selected_miner_bonds_uid_24"] = {
-                        "epoch_idx": last_epoch_idx,
-                        "target_uid": forced_uid,
-                        "target_hotkey": hotkeys_full[forced_uid] if hotkeys_full and forced_uid < len(hotkeys_full) else None,
-                        "real_bonds_column_normalized": real_col_norm,
-                        "sums": {
-                            "real_col_sum_pre_norm": real_col_sum_pre,
-                            "real_col_sum_post_norm": real_col_sum_post,
-                            "sim_B_col_sum": sim_col_b_sum,
-                            "sim_B_ema_col_sum": sim_col_b_ema_sum,
-                            "alpha": alpha_used,
-                            "validators_count": len([p for p in validator_positions if p >= 0])
-                        },
-                        "sim_bonds_column": sim_col_b,
-                        "intermediates": inter,
-                        "mapping": {
-                            "validators_hotkeys": validators_epoch,
-                            "validator_uids": [p for p in validator_positions],
-                            "miner_indices": miner_indices,
-                            "sim_col_idx": miner_indices.index(forced_uid) if miner_indices and (forced_uid in miner_indices) else None,
-                        }
-                    }
-                    logger.info("Added forced selected miner snapshots for UID 24")
-        except Exception as e:
-            logger.warning(f"Failed to add forced UID 24 snapshots: {e}")
-    
     # Analyze divergent dividends with stake comparisons  
     if not epoch_data.get('dividends', {}).get('matches', False):
         dividend_divergences = analyze_divergent_dividends_with_stakes(
@@ -427,6 +206,14 @@ def create_diagnostic_artifacts(
         )
         diagnostics["dividend_divergences"] = dividend_divergences
         logger.info(f"Found {len(dividend_divergences)} dividend divergences for analysis")
+    
+    # Analyze divergent incentives
+    if not epoch_data.get('incentives', {}).get('matches', False):
+        incentive_divergences = analyze_divergent_incentives(
+            case, sim_incentives, last_epoch_idx, tolerance
+        )
+        diagnostics["incentive_divergences"] = incentive_divergences
+        logger.info(f"Found {len(incentive_divergences)} incentive divergences for analysis")
     
     # Save artifacts
     save_diagnostic_artifacts(artifact_dir, diagnostics, netuid)
@@ -645,6 +432,92 @@ def analyze_divergent_dividends_with_stakes(
     return divergences[:100]
 
 
+def analyze_divergent_incentives(
+    case: 'MetagraphCase',
+    sim_incentives: Dict,
+    epoch_idx: int,
+    tolerance: float
+) -> List[Dict[str, Any]]:
+    """
+    For incentives that diverge beyond tolerance, analyze the differences between
+    simulated and real incentive values to identify consensus discrepancies.
+    
+    Args:
+        case: MetagraphCase with incentive data
+        sim_incentives: Simulated incentives per epoch
+        epoch_idx: Epoch index for comparison
+        tolerance: Tolerance threshold
+        
+    Returns:
+        List of divergence records with incentive comparisons
+    """
+    divergences = []
+    
+    # Get real incentives for this epoch
+    if epoch_idx >= len(case.metas):
+        return divergences
+    
+    epoch_meta = case.metas[epoch_idx]
+    real_incentives = epoch_meta.get("I", None)
+    
+    if real_incentives is None or not isinstance(real_incentives, torch.Tensor):
+        return divergences
+    
+    # Get simulated incentives for this epoch
+    if epoch_idx not in sim_incentives:
+        return divergences
+    
+    sim_incentives_epoch = sim_incentives[epoch_idx]
+    if not isinstance(sim_incentives_epoch, torch.Tensor):
+        return divergences
+    
+    # Get active miner UIDs for this epoch
+    miner_uids = epoch_meta.get("miner_uids", [])
+    hotkeys = epoch_meta.get("hotkeys", [])
+    
+    # Compare incentives for each miner
+    for miner_idx, miner_uid in enumerate(miner_uids):
+        if miner_idx >= sim_incentives_epoch.shape[0]:
+            break
+        
+        # Get simulated and real incentive values
+        sim_incentive = float(sim_incentives_epoch[miner_idx])
+        real_incentive = 0.0
+        
+        # Extract real incentive (miner_uid is the index in the full tensor)
+        if miner_uid < real_incentives.shape[0]:
+            real_incentive = float(real_incentives[miner_uid])
+        
+        # Calculate difference
+        incentive_diff = abs(sim_incentive - real_incentive)
+        
+        # Only include if divergence exceeds tolerance
+        if incentive_diff > tolerance:
+            # Get miner hotkey for identification
+            miner_hotkey = "N/A"
+            if miner_uid < len(hotkeys):
+                miner_hotkey = hotkeys[miner_uid][:10] + "..." if len(hotkeys[miner_uid]) > 10 else hotkeys[miner_uid]
+            
+            divergence = {
+                "miner_index": miner_idx,
+                "miner_uid": miner_uid,
+                "miner_hotkey": miner_hotkey,
+                
+                # Incentive comparison (what failed)
+                "incentive_comparison": {
+                    "simulated": sim_incentive,
+                    "expected": real_incentive,
+                    "difference": incentive_diff
+                }
+            }
+            
+            divergences.append(divergence)
+    
+    # Sort by incentive difference (largest first) and limit to top 100
+    divergences.sort(key=lambda x: x["incentive_comparison"]["difference"], reverse=True)
+    return divergences[:100]
+
+
 def save_diagnostic_artifacts(
     artifact_dir: Path,
     diagnostics: Dict[str, Any],
@@ -671,7 +544,8 @@ def save_diagnostic_artifacts(
         f.write("=" * 60 + "\n\n")
         
         f.write(f"Network UID: {netuid}\n")
-        f.write(f"Timestamp: {diagnostics['metadata']['timestamp']}\n")
+        f.write(f"Starting Block: {diagnostics['metadata']['starting_block']}\n")
+        f.write(f"Blocks Tested: {diagnostics['metadata']['blocks_tested']}\n")
         f.write(f"Tolerance: {diagnostics['metadata']['tolerance_used']}\n\n")
         
         summary = diagnostics['summary']
@@ -709,7 +583,6 @@ def save_diagnostic_artifacts(
                 f.write(f"      Simulated: {bond['simulated']:.6f}\n")
                 f.write(f"      Expected:  {bond['expected']:.6f}\n")
                 f.write(f"      Difference: {bond['difference']:.6f}\n")
-                f.write(f"      Raw Expected: {bond['raw_expected']:.1f}\n")
                 
                 # Weight comparison (potential cause)
                 weight = div['weight_comparison']
@@ -783,6 +656,19 @@ def save_diagnostic_artifacts(
                 f.write(f"           sim_B_ema_col_sum={sums.get('sim_B_ema_col_sum')}\n")
                 f.write(f"           alpha={sums.get('alpha')}\n\n")
 
+        # Write incentive divergences analysis if they exist
+        if diagnostics.get("incentive_divergences"):
+            f.write("INCENTIVE DIVERGENCES ANALYSIS:\n")
+            f.write("-" * 80 + "\n")
+            incentive_divs = diagnostics["incentive_divergences"][:10]  # Show top 10
+            f.write(f"Showing {min(10, len(diagnostics.get('incentive_divergences', [])))} of {len(diagnostics.get('incentive_divergences', []))} incentive divergences:\n\n")
+            
+            for i, div in enumerate(incentive_divs):
+                f.write(f"{i+1}. Miner UID {div.get('miner_uid')} → Incentive Mismatch\n")
+                f.write(f"   Simulated: {div.get('simulated_incentive', 0):.6f}\n")
+                f.write(f"   Expected:  {div.get('expected_incentive', 0):.6f}\n")
+                f.write(f"   Difference: {div.get('difference', 0):.6f}\n\n")
+        
         f.write(f"\nFull diagnostic data saved in: {artifact_dir}\n")
     
     logger.info(f"Human-readable summary saved to: {summary_path}")
@@ -1681,6 +1567,177 @@ def print_validation_results(results: Dict[str, Any]):
                         extra_info += f", missing_miners: {data['missing_miners']}"
                     
                     print(f"  {metric}: {status} (max_diff: {data.get('max_diff', 0):.6f}, mean_diff: {data.get('mean_diff', 0):.6f}, nonzero_diffs: {data.get('nonzero_diffs', 0)}{extra_info})")
+
+
+def create_bond_evolution_report(
+    case: 'MetagraphCase',
+    sim_bonds: List[torch.Tensor],
+    target_miner_uid: int,
+    focus_validator_uid: int,
+    netuid: int,
+    tested_blocks: List[int]
+) -> Dict[str, Any]:
+    """
+    Creates a comprehensive bond evolution report tracking how validator bonds to a specific miner
+    evolve across epochs. Shows both simulated and real bond values for analysis.
+    
+    This function tracks bond evolution patterns by examining all validators' bonds toward 
+    a target miner across multiple epochs, with special focus on one validator's behavior.
+    Includes stake information and weight values to provide context for bond decisions.
+    
+    Args:
+        case: MetagraphCase containing real metagraph data across epochs
+        sim_bonds: List of simulated bond tensors, one per epoch
+        target_miner_uid: UID of the miner to track bonds toward
+        focus_validator_uid: UID of validator to focus analysis on
+        netuid: Network ID being analyzed
+        tested_blocks: List of block numbers corresponding to each epoch
+        
+    Returns:
+        Dict containing comprehensive bond evolution data with blocks instead of timestamps
+    """
+    
+    bond_report = {
+        "metadata": {
+            "target_miner_uid": target_miner_uid,
+            "focus_validator_uid": focus_validator_uid,
+            "netuid": netuid,
+            "blocks": tested_blocks  # Use blocks instead of timestamp
+        },
+        "epochs": []
+    }
+    
+    # Process each epoch
+    for epoch_idx in range(len(case.metas)):
+        if epoch_idx >= len(sim_bonds):
+            break
+            
+        epoch_meta = case.metas[epoch_idx]
+        sim_bonds_epoch = sim_bonds[epoch_idx]
+        
+        # Get real bonds for this epoch - both raw and normalized versions
+        real_bonds_raw = epoch_meta.get("bonds", torch.zeros(1, 1))
+        real_bonds_normalized = torch.zeros(1, 1)
+        real_bonds_colsum = torch.zeros(1, 1)
+        
+        if isinstance(real_bonds_raw, torch.Tensor) and len(real_bonds_raw.shape) == 2:
+            # Normalize from fixed point (divide by 65535)
+            real_bonds_normalized = real_bonds_raw / 65535.0
+            # Apply column-sum normalization like in validation
+            real_bonds_colsum = real_bonds_raw / (real_bonds_raw.sum(dim=0, keepdim=True) + 1e-8)
+        
+        # Extract active validator and miner UIDs for this epoch
+        # Try to get from case structure first, fallback to epoch_meta
+        if epoch_idx < len(case.valid_indices_epochs):
+            validator_uids = case.valid_indices_epochs[epoch_idx]
+        else:
+            validator_uids = epoch_meta.get("validator_uids", [])
+        
+        if epoch_idx < len(case.miner_indices_epochs):
+            miner_uids = case.miner_indices_epochs[epoch_idx]
+        else:
+            miner_uids = epoch_meta.get("miner_uids", [])
+        
+        hotkeys = epoch_meta.get("hotkeys", [])
+        
+        epoch_data = {
+            "epoch": epoch_idx,
+            "validators": {},
+            "summary": {},
+            "bonds_property_shape": list(sim_bonds_epoch.shape) if hasattr(sim_bonds_epoch, 'shape') else [],
+            "bonds_property_sum": float(sim_bonds_epoch.sum()) if hasattr(sim_bonds_epoch, 'sum') else 0
+        }
+        
+        # Track bond data for each validator toward target miner
+        sim_bonds_to_target_sum = 0.0
+        sim_bonds_to_target_nonzero = 0
+        
+        for val_idx, validator_uid in enumerate(validator_uids):
+            if val_idx >= sim_bonds_epoch.shape[0]:
+                break
+                
+            # Find target miner index in miner_uids list
+            target_miner_idx = None
+            try:
+                if target_miner_uid in miner_uids:
+                    target_miner_idx = miner_uids.index(target_miner_uid)
+            except (ValueError, TypeError):
+                pass
+            
+            # Extract bond values
+            sim_bond_value = 0.0
+            real_bond_raw = 0.0 
+            real_bond_normalized = 0.0
+            real_bond_colsum = 0.0
+            
+            if target_miner_idx is not None and target_miner_idx < sim_bonds_epoch.shape[1]:
+                sim_bond_value = float(sim_bonds_epoch[val_idx, target_miner_idx])
+                
+                # Real bond extraction - use validator_uid not val_idx!
+                if (validator_uid < real_bonds_raw.shape[0] and 
+                    target_miner_uid < real_bonds_raw.shape[1]):
+                    real_bond_raw = float(real_bonds_raw[validator_uid, target_miner_uid])
+                    real_bond_normalized = real_bond_raw / 65535.0  # Fixed point normalization
+                    
+                    # Successfully extracted real bond data
+                
+                if (validator_uid < real_bonds_colsum.shape[0] and 
+                    target_miner_uid < real_bonds_colsum.shape[1]):
+                    real_bond_colsum = float(real_bonds_colsum[validator_uid, target_miner_uid])
+                    if real_bond_colsum > 0:
+                        logger.debug(f"Validator {validator_uid} → Miner {target_miner_uid}: colsum={real_bond_colsum}")
+            
+            # Update summary counters
+            sim_bonds_to_target_sum += sim_bond_value
+            if sim_bond_value > 0:
+                sim_bonds_to_target_nonzero += 1
+            
+            # Get validator's weight toward target miner
+            weight_value = 0.0
+            if "W" in epoch_meta and isinstance(epoch_meta["W"], torch.Tensor):
+                W = epoch_meta["W"]
+                if (validator_uid < W.shape[0] and target_miner_uid < W.shape[1]):
+                    weight_value = float(W[validator_uid, target_miner_uid])
+            
+            # Get validator's stake
+            stake_value = 0.0
+            if "S" in epoch_meta and isinstance(epoch_meta["S"], torch.Tensor):
+                S = epoch_meta["S"]
+                if validator_uid < S.shape[0]:
+                    stake_value = float(S[validator_uid])
+            
+            # Get validator hotkey for identification
+            hotkeys = epoch_meta.get("hotkeys", [])
+            validator_hotkey = "N/A"
+            if validator_uid < len(hotkeys):
+                validator_hotkey = hotkeys[validator_uid][:16] + "..." if len(hotkeys[validator_uid]) > 16 else hotkeys[validator_uid]
+            
+            # Store validator data
+            epoch_data["validators"][f"uid_{validator_uid}"] = {
+                "validator_uid": validator_uid,
+                "validator_hotkey": validator_hotkey,
+                "bonds": {
+                    "simulated": sim_bond_value,
+                    "real_raw": real_bond_raw,
+                    "real_normalized": real_bond_normalized,
+                    "real_col_sum": real_bond_colsum
+                },
+                "weights": {
+                    "value": weight_value
+                },
+                "stake": stake_value
+            }
+        
+        # Add summary data
+        epoch_data["summary"] = {
+            "sim_bonds_to_target_sum": sim_bonds_to_target_sum,
+            "sim_bonds_to_target_nonzero": sim_bonds_to_target_nonzero,
+            "num_validators": len(validator_uids)
+        }
+        
+        bond_report["epochs"].append(epoch_data)
+    
+    return bond_report
 
 
 def main():

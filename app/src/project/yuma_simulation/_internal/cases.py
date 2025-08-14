@@ -106,6 +106,7 @@ class MetagraphCase(BaseCase):
     shift_validator_hotkey: str = ""
     base_validator: str = ""
     num_epochs: int = 40
+    max_validators: int = 64
 
     name: str = "Dynamic Metagraph Case"
     metas: list[dict] = field(default_factory=list)  # List of metagraph dicts: { "S": ..., "W": ..., "hotkeys": ... }
@@ -144,15 +145,28 @@ class MetagraphCase(BaseCase):
         # For each metagraph (epoch), compute the validators and miner indices.
         for idx, meta in enumerate(self.metas):
             stakes_tensor = meta["S"]  # shape [n_validators]
-            mask = stakes_tensor >= 1000
+            # Build active mask (already used below to zero S for inactive)
+            # Select top-K active validators by stake (approximate on-chain permits)
+            # Ensure inactive validators are excluded from selection
+            k = int(self.max_validators) if self.max_validators and self.max_validators > 0 else len(stakes_tensor)
+            k = min(k, stakes_tensor.numel())
 
-            valid_indices = mask.nonzero(as_tuple=True)[0].tolist()
+            # Inactive stakes are already zeroed in from_mg_dumper_data; select among remaining
+            stakes_for_selection = stakes_tensor
+
+            try:
+                topk_vals, topk_idx = torch.topk(stakes_for_selection, k=k)
+                selected = set(topk_idx[topk_vals > 0].tolist())
+                valid_indices = [i for i in range(stakes_tensor.numel()) if i in selected]
+            except Exception:
+                # Fallback: keep nonzero active stakes if topk fails
+                valid_indices = (stakes_for_selection > 0).nonzero(as_tuple=True)[0].tolist()
 
             n = stakes_tensor.size(0)
             miner_indices = list(range(n))
 
             if not valid_indices:
-                raise ValueError(f"No validators have S >= 1000 in metagraph (epoch) {idx}.")
+                raise ValueError(f"No active validators found in metagraph (epoch) {idx}.")
 
             self.valid_indices_epochs.append(valid_indices)
             self.miner_indices_epochs.append(miner_indices)
@@ -355,7 +369,7 @@ class MetagraphCase(BaseCase):
                 B_valid = B_valid / 65535.0
                 # Column-normalize over the filtered validator set to sum to 1
                 col_sums = B_valid.sum(dim=0)
-                B_valid = B_valid / (col_sums + 1e-6)
+                B_valid = B_valid / (col_sums + 1e-9)  # Use moderately smaller epsilon
                 B_valid = torch.nan_to_num(B_valid)
                 bonds.append(B_valid)
             else:
