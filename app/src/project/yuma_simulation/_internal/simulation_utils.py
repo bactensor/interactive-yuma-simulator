@@ -132,7 +132,6 @@ def _run_dynamic_simulation(
 
     # These states are passed between epochs.
     # Initialize B_state with bonds from first epoch if available
-    # bonds_epochs already returns normalized and column-normalized bonds for the filtered set
     B_state: torch.Tensor | None = (
         case.bonds_epochs[0].clone()
         if hasattr(case, 'bonds_epochs') and case.bonds_epochs[0] is not None 
@@ -159,11 +158,10 @@ def _run_dynamic_simulation(
         current_validator_count = len(current_validators)
         current_miner_count = len(current_miner_indices)
 
-        should_align_bond_state = (
-            B_state is not None
-            and (B_state.shape[0] != current_validator_count or B_state.shape[1] != current_miner_count)
-        )
-        if should_align_bond_state:
+        # Align any carried state if needed
+        if B_state is not None and (
+            B_state.shape[0] != current_validator_count or B_state.shape[1] != current_miner_count
+        ):
             if epoch > 0:
                 old_validators: list[str] = case.validators_epochs[epoch - 1]
                 old_miner_indices: list[int] = case.miner_indices_epochs[epoch - 1]
@@ -176,6 +174,14 @@ def _run_dynamic_simulation(
                 old_validators=old_validators,
                 old_miner_indices=old_miner_indices,
             )
+
+        # Apply "recently registered" mask: zero columns for miners that appear in current but not in previous epoch
+        if epoch > 0:
+            prev_miner_indices = set(case.miner_indices_epochs[epoch - 1])
+            recent_cols = [j for j, uid in enumerate(current_miner_indices) if uid not in prev_miner_indices]
+            # Mask recently registered columns in carried state
+            if B_state is not None and recent_cols:
+                B_state[:, recent_cols] = 0.0
 
         should_align_consensus_state = (
             C_state is not None

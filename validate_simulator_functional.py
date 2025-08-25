@@ -98,10 +98,7 @@ def create_diagnostic_artifacts(
         },
         "bond_divergences": [],
         "dividend_divergences": [],
-        "summary": {},
-        # Optional single-miner deep dive for weights across all UIDs (length 256)
-        "selected_miner_weights": None,
-        "selected_miner_bonds": None
+        "summary": {}
     }
     
     # Extract comparison data
@@ -137,7 +134,18 @@ def create_diagnostic_artifacts(
         logger.info(f"Found {len(bond_divergences)} bond divergences for analysis")
 
         # Generate bond evolution report for the most divergent validator-miner pair
+        # Pick the largest divergence where BOTH simulated and real bonds are non-zero
         if bond_divergences:
+            # max_divergence = None
+            # for div in bond_divergences:
+            #     bond_comp = div['bond_comparison']
+            #     if bond_comp['expected'] > 0 and bond_comp['simulated'] > 0:  # Both non-zero
+            #         max_divergence = div
+            #         break
+            
+            # # Fallback to largest divergence if no non-zero pairs found
+            # if max_divergence is None:
+            #     max_divergence = bond_divergences[0]
             max_divergence = bond_divergences[0]  # Already sorted by difference
             max_validator_uid = max_divergence['validator_uid']
             max_target_uid = max_divergence['target_uid']
@@ -214,6 +222,7 @@ def create_diagnostic_artifacts(
         )
         diagnostics["incentive_divergences"] = incentive_divergences
         logger.info(f"Found {len(incentive_divergences)} incentive divergences for analysis")
+        log_incentive_comparison_details(incentive_divergences)
     
     # Save artifacts
     save_diagnostic_artifacts(artifact_dir, diagnostics, netuid)
@@ -328,7 +337,7 @@ def analyze_divergent_bonds_with_weights(
     
     # Sort by bond difference (largest first) and limit to top 100
     divergences.sort(key=lambda x: x["bond_comparison"]["difference"], reverse=True)
-    return divergences[:100]
+    return divergences
 
 
 def analyze_divergent_dividends_with_stakes(
@@ -458,50 +467,37 @@ def analyze_divergent_incentives(
         return divergences
     
     epoch_meta = case.metas[epoch_idx]
-    real_incentives = epoch_meta.get("I", None)
+    real_incentives = epoch_meta.get("incentives", None)
     
     if real_incentives is None or not isinstance(real_incentives, torch.Tensor):
         return divergences
     
-    # Get simulated incentives for this epoch
-    if epoch_idx not in sim_incentives:
-        return divergences
-    
-    sim_incentives_epoch = sim_incentives[epoch_idx]
-    if not isinstance(sim_incentives_epoch, torch.Tensor):
-        return divergences
-    
     # Get active miner UIDs for this epoch
-    miner_uids = epoch_meta.get("miner_uids", [])
+    miner_uids = case.miner_indices_epochs[epoch_idx] if epoch_idx < len(case.miner_indices_epochs) else []
     hotkeys = epoch_meta.get("hotkeys", [])
     
     # Compare incentives for each miner
     for miner_idx, miner_uid in enumerate(miner_uids):
-        if miner_idx >= sim_incentives_epoch.shape[0]:
+        if miner_idx >= len(hotkeys):
             break
-        
-        # Get simulated and real incentive values
-        sim_incentive = float(sim_incentives_epoch[miner_idx])
-        real_incentive = 0.0
-        
-        # Extract real incentive (miner_uid is the index in the full tensor)
-        if miner_uid < real_incentives.shape[0]:
-            real_incentive = float(real_incentives[miner_uid])
-        
-        # Calculate difference
-        incentive_diff = abs(sim_incentive - real_incentive)
-        
-        # Only include if divergence exceeds tolerance
-        if incentive_diff > tolerance:
-            # Get miner hotkey for identification
-            miner_hotkey = "N/A"
-            if miner_uid < len(hotkeys):
-                miner_hotkey = hotkeys[miner_uid][:10] + "..." if len(hotkeys[miner_uid]) > 10 else hotkeys[miner_uid]
             
+        miner_hotkey = hotkeys[miner_idx]
+        
+        # Get simulated incentive from hotkey-based dictionary
+        sim_incentive = 0.0
+        if miner_hotkey in sim_incentives and isinstance(sim_incentives[miner_hotkey], list) and len(sim_incentives[miner_hotkey]) > 0:
+            sim_incentive = float(sim_incentives[miner_hotkey][-1])  # Last epoch value
+        
+        # Get real incentive from tensor
+        real_incentive = float(real_incentives[miner_uid]) if miner_uid < real_incentives.shape[0] else 0.0
+        
+        # Check if difference exceeds tolerance
+        incentive_diff = abs(sim_incentive - real_incentive)
+        if incentive_diff > tolerance:
             divergence = {
                 "miner_index": miner_idx,
                 "miner_uid": miner_uid,
-                "miner_hotkey": miner_hotkey,
+                "miner_hotkey": miner_hotkey[:10] + "..." if len(miner_hotkey) > 10 else miner_hotkey,
                 
                 # Incentive comparison (what failed)
                 "incentive_comparison": {
@@ -517,6 +513,29 @@ def analyze_divergent_incentives(
     divergences.sort(key=lambda x: x["incentive_comparison"]["difference"], reverse=True)
     return divergences[:100]
 
+
+def log_incentive_comparison_details(incentive_divergences: List[Dict[str, Any]]) -> None:
+    """Log detailed comparison for top incentive divergences"""
+    if not incentive_divergences:
+        return
+        
+    logger.info("=== INCENTIVE COMPARISON DETAILS (Divergences only) ===")
+    total_divergences = len(incentive_divergences)
+    logger.info(f"Total incentive divergences: {total_divergences}")
+    
+    logger.info("Top 10 miners with largest incentive differences:")
+    for _, div in enumerate(incentive_divergences[:10]):
+        miner_uid = div['miner_uid']
+        comp = div['incentive_comparison']
+        sim_val = comp['simulated']
+        real_val = comp['expected']
+        diff = comp['difference']
+        
+        logger.info(f"  Miner [UID{miner_uid}]: Sim={sim_val:.6f}, Real={real_val:.6f}, Diff={diff:.6f}")
+    
+    if total_divergences > 0:
+        max_diff = incentive_divergences[0]['incentive_comparison']['difference']
+        logger.info(f"Largest incentive difference: {max_diff}")
 
 def save_diagnostic_artifacts(
     artifact_dir: Path,
@@ -616,28 +635,21 @@ def save_diagnostic_artifacts(
                 f.write(f"      Difference:          {stake['difference']:.6f}\n")
             f.write("\n")
 
-        # Selected miner weights snapshot (for deeper analysis)
-        if diagnostics.get("selected_miner_weights"):
-            smw = diagnostics["selected_miner_weights"]
-            f.write("SELECTED MINER WEIGHTS SNAPSHOT:\n")
+        # Write incentive divergences
+        if diagnostics.get("incentive_divergences"):
+            f.write(f"INCENTIVE DIVERGENCES (showing {min(10, len(diagnostics['incentive_divergences']))} of {len(diagnostics['incentive_divergences'])}):\n")
             f.write("-" * 80 + "\n")
-            f.write(f"  Epoch index: {smw.get('epoch_idx')}\n")
-            f.write(f"  Target UID:  {smw.get('target_uid')}\n")
-            f.write(f"  Target HK:   {smw.get('target_hotkey', '')}\n")
-            f.write("  Details: Full 256-length weight column and simulator-fed filtered column\n")
-            f.write("           saved in diagnostic_report.json under 'selected_miner_weights'.\n\n")
-
-        # Selected miner bonds snapshot (for deeper analysis)
-        if diagnostics.get("selected_miner_bonds"):
-            smb = diagnostics["selected_miner_bonds"]
-            f.write("SELECTED MINER BONDS SNAPSHOT:\n")
-            f.write("-" * 80 + "\n")
-            f.write(f"  Epoch index: {smb.get('epoch_idx')}\n")
-            f.write(f"  Target UID:  {smb.get('target_uid')}\n")
-            f.write(f"  Target HK:   {smb.get('target_hotkey', '')}\n")
-            f.write("  Details: Normalized real bonds column (filtered validators), simulator bonds column,\n")
-            f.write("           and previous-epoch aligned simulator bonds saved in diagnostic_report.json\n")
-            f.write("           under 'selected_miner_bonds'.\n\n")
+            
+            for i, inc in enumerate(diagnostics["incentive_divergences"][:10]):
+                f.write(f"\n{i+1}. Miner UID {inc['miner_uid']} ({inc['miner_hotkey']}) - Index {inc['miner_index']}\n")
+                
+                # Incentive comparison
+                incentive = inc['incentive_comparison']
+                f.write(f"   🎯 INCENTIVE COMPARISON:\n")
+                f.write(f"      Simulated: {incentive['simulated']:.6f}\n")
+                f.write(f"      Expected:  {incentive['expected']:.6f}\n")
+                f.write(f"      Difference: {incentive['difference']:.6f}\n")
+            f.write("\n")
 
         # Forced UID 24 snapshots (weights and bonds)
         if diagnostics.get("selected_miner_weights_uid_24") or diagnostics.get("selected_miner_bonds_uid_24"):
@@ -713,7 +725,6 @@ def normalize_hyperparameters(raw_params: Dict[str, Any]) -> Dict[str, Any]:
         normalized['alpha_sigmoid_steepness'] = float(raw_params['alpha_sigmoid_steepness'])
     else:
         normalized['alpha_sigmoid_steepness'] = 10.0
-        logger.info(f"Using default value for optional parameter alpha_sigmoid_steepness: 10.0")
     
     # Determine bond_penalty: prefer explicit field if available; otherwise fallback to alpha_high
     bond_penalty = None
@@ -730,10 +741,38 @@ def normalize_hyperparameters(raw_params: Dict[str, Any]) -> Dict[str, Any]:
             logger.warning(f"Failed to parse bond_penalty from hyperparams: {bp_raw}")
     if bond_penalty is None:
         bond_penalty = 1.0
-        logger.info("No explicit bond_penalty in hyperparams; defaulting to 1.0")
     normalized['bond_penalty'] = bond_penalty
     
     return normalized
+
+
+def get_top_subnets_by_tao_emission(top_n: int = 10) -> List[int]:
+    """
+    Get top N subnets sorted by tao_in_emission.
+    
+    Args:
+        top_n: Number of top subnets to return
+        
+    Returns:
+        List of netuid integers for top subnets
+    """
+    try:
+        import bittensor as bt
+        s = bt.subtensor()
+        
+        # Get all subnets and sort by tao_in_emission
+        all_subnets = list(s.all_subnets())
+        all_subnets.sort(key=lambda sn: sn.tao_in_emission, reverse=True)
+        
+        # Filter out subnet 0 (root network) and get top N
+        filtered_subnets = [sn for sn in all_subnets if sn.netuid != 0]
+        top_subnets = filtered_subnets[:top_n]
+        
+        # Return just the netuids
+        return [sn.netuid for sn in top_subnets]
+    except Exception as e:
+        logger.error(f"Error fetching top subnets: {e}")
+        return []
 
 
 def fetch_subnet_hyperparameters(netuid: int, service_url: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -762,8 +801,8 @@ def fetch_subnet_hyperparameters(netuid: int, service_url: Optional[str] = None)
         
         if response.status_code == 200:
             data = response.json()
+            yuma_version = "YUMA3" if data.get('is_yuma3_on', False) else "YUMA2"
             logger.info(f"Successfully fetched hyperparameters for subnet {netuid}")
-            logger.info(f"Hyperparameters: {data.get('hyperparams', {})}")
             return data
         elif response.status_code == 404:
             logger.warning(f"No hyperparameters found for subnet {netuid}")
@@ -813,8 +852,9 @@ def fetch_multiple_subnets_hyperparameters(subnet_ids: List[int], service_url: O
             result = {}
             for subnet_data in data.get('subnets', []):
                 subnet_id = subnet_data['subnet']
+                yuma_version = "YUMA3" if subnet_data.get('is_yuma3_on', False) else "YUMA2"
                 result[subnet_id] = subnet_data
-                logger.info(f"Successfully fetched hyperparameters for subnet {subnet_id}")
+                logger.info(f"Successfully fetched hyperparameters for subnet {subnet_id} (Yuma version: {yuma_version})")
             
             # Log any subnets that weren't found
             not_found = data.get('not_found', [])
@@ -909,23 +949,22 @@ def prepare_metagraph_data(
     # Limit to requested number of epochs
     case.num_epochs = max_epochs
     case.metas = case.metas[:max_epochs]
-    
-    logger.info(f"Validation setup: Using epoch 0 as input, running {max_epochs} epochs, validating against epoch {max_epochs-1} outputs")
-    
+        
     # Return limited blocks list for reporting
     tested_blocks = blocks[:max_epochs]
     return case, tested_blocks
 
 
-def setup_yuma_configuration(netuid: int, bond_penalty_override: Optional[float] = None) -> YumaConfig:
+def setup_yuma_configuration(netuid: int, bond_penalty_override: Optional[float] = None) -> Tuple[YumaConfig, bool]:
     """
     Fetch hyperparameters and setup Yuma configuration.
     
     Args:
         netuid: Network UID
+        bond_penalty_override: Optional override for bond_penalty
         
     Returns:
-        YumaConfig object
+        Tuple of (YumaConfig object, is_yuma3_on boolean)
         
     Raises:
         ValueError: If hyperparameters cannot be fetched or normalized
@@ -936,8 +975,7 @@ def setup_yuma_configuration(netuid: int, bond_penalty_override: Optional[float]
         raise ValueError(f"Failed to fetch hyperparameters for subnet {netuid}. Cannot proceed with validation.")
     
     raw_hyperparams = hyperparams_data['hyperparams']
-
-    logger.info(f"Fetched hyperparameters for subnet {netuid}, processing...")
+    is_yuma3_on = hyperparams_data.get('is_yuma3_on', False)
     
     try:
         params = normalize_hyperparameters(raw_hyperparams)
@@ -964,7 +1002,7 @@ def setup_yuma_configuration(netuid: int, bond_penalty_override: Optional[float]
             )
         )
         
-        return yuma_config
+        return yuma_config, is_yuma3_on
         
     except KeyError as e:
         logger.error(f"Hyperparameter validation failed: {e}")
@@ -972,66 +1010,6 @@ def setup_yuma_configuration(netuid: int, bond_penalty_override: Optional[float]
     except Exception as e:
         logger.error(f"Error processing hyperparameters: {e}")
         raise
-
-
-
-def analyze_simulation_output(
-    sim_dividends: Dict,
-    sim_bonds: List,
-    sim_incentives_per_epoch: Dict,
-    yuma_config: YumaConfig
-) -> None:
-    """
-    Analyze and log detailed simulation output for debugging.
-    
-    Args:
-        sim_dividends: Simulation dividends output
-        sim_bonds: Simulation bonds output
-        sim_incentives_per_epoch: Simulation incentives output
-        yuma_config: Yuma configuration used
-    """
-    logger.info(f"=== SIMULATION OUTPUT ANALYSIS ===")
-    logger.info(f"Simulation output: {len(sim_bonds)} bond epochs, {len(sim_dividends)} validators, {len(sim_incentives_per_epoch)} miners")
-    
-    if isinstance(sim_dividends, dict) and len(sim_dividends) > 0:
-        all_sim_dividends = []
-        for validator_hotkey, dividend_list in sim_dividends.items():
-            if isinstance(dividend_list, list):
-                all_sim_dividends.extend(dividend_list)
-            else:
-                all_sim_dividends.append(dividend_list)
-        
-        if all_sim_dividends:
-            sim_div_tensor_all = torch.tensor(all_sim_dividends, dtype=torch.float32)
-            logger.info(f"All simulation dividends:")
-            logger.info(f"  - Count: {len(all_sim_dividends)}")
-            logger.info(f"  - Range: {sim_div_tensor_all.min().item():.12e} - {sim_div_tensor_all.max().item():.12e}")
-            logger.info(f"  - Sum: {sim_div_tensor_all.sum().item():.12e}")
-            logger.info(f"  - Mean: {sim_div_tensor_all.mean().item():.12e}")
-            
-            epoch_count = len(list(sim_dividends.values())[0]) if sim_dividends else 0
-            logger.info(f"Epochs in simulation: {epoch_count}")
-            
-            if epoch_count > 0:
-                for epoch_idx in range(epoch_count):
-                    epoch_dividends = []
-                    for validator_hotkey, dividend_list in sim_dividends.items():
-                        if len(dividend_list) > epoch_idx:
-                            epoch_dividends.append(dividend_list[epoch_idx])
-                    
-                    if epoch_dividends:
-                        epoch_sum = sum(epoch_dividends)
-                        epoch_max = max(epoch_dividends)
-                        epoch_min = min(epoch_dividends)
-                        logger.info(f"  Epoch {epoch_idx} dividends: sum={epoch_sum:.12e}, range={epoch_min:.12e} - {epoch_max:.12e}")
-        
-        logger.info(f"Simulation configuration:")
-        logger.info(f"  - total_epoch_emission: {yuma_config.total_epoch_emission}")
-        logger.info(f"  - validator_emission_ratio: {yuma_config.validator_emission_ratio}")
-        expected_validator_emission = yuma_config.total_epoch_emission * yuma_config.validator_emission_ratio
-        logger.info(f"  - expected validator emission per epoch: {expected_validator_emission}")
-    
-    logger.info(f"=== END SIMULATION OUTPUT ANALYSIS ===")
 
 
 def compare_bonds(
@@ -1062,17 +1040,13 @@ def compare_bonds(
         }
     
     # Use the last simulation bonds output
-    sim_bonds_epoch = sim_bonds[-1]  # Shape: [num_validators, 256]
-    
-    logger.info(f"Bonds shapes - sim: {sim_bonds_epoch.shape}, real_full: {real_bonds_full.shape}")
-    
+    sim_bonds_epoch = sim_bonds[-1]  # Shape: [num_validators, 256]    
     # Extract validator rows from full real bonds matrix
     validator_positions = []
     for i, validator_hotkey in enumerate(validators_epoch):
         try:
             pos = epoch_hotkeys.index(validator_hotkey)
             validator_positions.append(pos)
-            logger.info(f"Validator mapping: filtered_index={i} -> UID={pos} (hotkey={validator_hotkey[:10]}...)")
         except ValueError:
             logger.warning(f"Validator {validator_hotkey[:10]}... not found in epoch hotkeys")
             return {
@@ -1082,9 +1056,7 @@ def compare_bonds(
     
     # Extract rows for active validators from full real bonds
     real_bonds_epoch = real_bonds_full[validator_positions, :]  # Shape: [num_validators, 256]
-    
-    logger.info(f"After filtering - sim: {sim_bonds_epoch.shape}, real: {real_bonds_epoch.shape}")
-    
+        
     if sim_bonds_epoch.shape != real_bonds_epoch.shape:
         return {
             'error': f"Shape mismatch after filtering: sim={sim_bonds_epoch.shape}, real={real_bonds_epoch.shape}",
@@ -1098,12 +1070,7 @@ def compare_bonds(
     real_bonds_column_sums = real_bonds_normalized.sum(dim=0)
     real_bonds_normalized = real_bonds_normalized / (real_bonds_column_sums + 1e-6)
     real_bonds_normalized = torch.nan_to_num(real_bonds_normalized)
-    
-    logger.info(f"Real bonds normalization:")
-    logger.info(f"  Original range: {real_bonds_epoch.min().item():.0f} - {real_bonds_epoch.max().item():.0f}")
-    logger.info(f"  After /65535: {(real_bonds_epoch / 65535.0).min().item():.6f} - {(real_bonds_epoch / 65535.0).max().item():.6f}")
-    logger.info(f"  After column normalization: {real_bonds_normalized.min().item():.6f} - {real_bonds_normalized.max().item():.6f}")
-    
+
     # Compare normalized tensors
     bonds_diff = torch.abs(sim_bonds_epoch - real_bonds_normalized)
     bonds_max_diff = torch.max(bonds_diff).item()
@@ -1174,8 +1141,6 @@ def compare_bonds(
     else:
         logger.info("No non-zero bonds found in either simulation or real data")
     
-    logger.info("=== END BONDS COMPARISON ===")
-    
     return {
         'max_diff': bonds_max_diff,
         'mean_diff': bonds_mean_diff,
@@ -1214,7 +1179,6 @@ def compare_dividends(
         }
     
     logger.info(f"=== DIVIDENDS COMPARISON DETAILS ===")
-    logger.info(f"Real dividends shape: {real_dividends_epoch1.shape}")
     logger.info(f"Validators count: {len(validators_epoch1)}")
     
     # Extract simulation dividends in the same order as validators_epoch1
@@ -1248,16 +1212,11 @@ def compare_dividends(
             'matches': False
         }
     
-    logger.info(f"Real dividends range: {real_dividends_epoch1.min().item():.6f} - {real_dividends_epoch1.max().item():.6f}")
-    logger.info(f"Sim dividends range: {sim_div_tensor.min().item():.12e} - {sim_div_tensor.max().item():.12e}")
-    
     # Handle scaling if needed
     sim_div_scale = sim_div_tensor.max().item()
     real_div_scale = real_dividends_epoch1.max().item()
     scale_ratio = real_div_scale / sim_div_scale if sim_div_scale > 0 else float('inf')
-    
-    logger.info(f"Scale difference: Real/Sim = {scale_ratio:.2e}")
-    
+        
     if sim_div_scale < 1e-6 and real_div_scale > 0.01:
         logger.info("Scaling simulation dividends to match real dividends")
         sim_div_tensor = sim_div_tensor * scale_ratio
@@ -1287,7 +1246,6 @@ def compare_dividends(
     
     logger.info(f"Max difference: {div_max_diff:.6f}")
     logger.info(f"Mean difference: {div_mean_diff:.6f}")
-    logger.info("=== END DIVIDENDS COMPARISON ===")
     
     return {
         'max_diff': div_max_diff,
@@ -1390,20 +1348,21 @@ def validate_simulator(
     case, tested_blocks = prepare_metagraph_data(start_date, end_date, netuid, max_epochs)
     
     # 2. Setup Yuma configuration
-    yuma_config = setup_yuma_configuration(netuid, bond_penalty_override)
+    yuma_config, is_yuma3_on = setup_yuma_configuration(netuid, bond_penalty_override)
     
     # 3. Run simulation
-    logger.info("Running YUMA2 simulation...")
+    yuma_simulation_name = YumaSimulationNames().YUMA3 if is_yuma3_on else YumaSimulationNames().YUMA2
+    yuma_version = "YUMA3" if is_yuma3_on else "YUMA2"
+    logger.info(f"Running {yuma_version} simulation...")
     sim_dividends, _, sim_bonds, sim_incentives_per_epoch, sim_normalized_dividends = _run_dynamic_simulation(
         case=case,
-        yuma_version=YumaSimulationNames().YUMA2,
+        yuma_version=yuma_simulation_name,
         yuma_config=yuma_config
     )
     
     # 4. Extract real data for comparison (last epoch)
     actual_epochs = case.num_epochs
     last_epoch_idx = actual_epochs - 1
-    logger.info(f"Comparing against epoch {last_epoch_idx} (actual epochs: {actual_epochs})")
     
     # IMPORTANT: Use FULL bonds data (not filtered) to match simulation output
     # Simulation outputs full 256x256 matrices, so we need full real data too
@@ -1411,31 +1370,12 @@ def validate_simulator(
     real_incentives_last = case.incentives_epochs[last_epoch_idx] if len(case.incentives_epochs) > last_epoch_idx else None
     real_dividends_last = case.dividends_epochs[last_epoch_idx] if len(case.dividends_epochs) > last_epoch_idx else None
     
-    # Log dividends analysis
-    logger.info(f"=== DIVIDENDS DATA ANALYSIS ===")
-    if real_dividends_last is not None:
-        logger.info(f"Filtered dividends (case.dividends_epochs[{last_epoch_idx}]):")
-        logger.info(f"  - Shape: {real_dividends_last.shape}")
-        logger.info(f"  - Range: {real_dividends_last.min().item():.6f} - {real_dividends_last.max().item():.6f}")
-        logger.info(f"  - Sum: {real_dividends_last.sum().item():.6f}")
-        logger.info(f"  - Sample values: {real_dividends_last[:5].tolist()}")
-    else:
-        logger.info(f"No dividends data available for epoch {last_epoch_idx}")
-    logger.info(f"=== END DIVIDENDS ANALYSIS ===")
-    
-    logger.info(f"Extracted epoch {last_epoch_idx} real data for comparison:")
-    logger.info(f"  - Bonds shape: {real_bonds_last.shape if real_bonds_last is not None else 'None'} (FULL 256x256)")
-    logger.info(f"  - Incentives shape: {real_incentives_last.shape if real_incentives_last is not None else 'None'}")
-    logger.info(f"  - Dividends shape: {real_dividends_last.shape if real_dividends_last is not None else 'None'}")
-    
-    # 5. Analyze simulation output (optional debugging)
-    analyze_simulation_output(sim_dividends, sim_bonds, sim_incentives_per_epoch, yuma_config)
-    
     # 6. Initialize validation results
     validation_results = {
         'blocks_tested': tested_blocks,
         'epochs_tested': last_epoch_idx,  # We test the last epoch
         'epoch_0_bonds_used_as_input': True,
+        'yuma_version': yuma_version,
         'comparisons': {},
         'summary': {
             'bonds_match': True,
@@ -1517,13 +1457,9 @@ def validate_simulator(
 
 def print_validation_results(results: Dict[str, Any]):
     """Print validation results in a readable format."""
-    print("\n" + "="*60)
-    print("YUMA SIMULATOR VALIDATION RESULTS (Functional)")
-    print("="*60)
     
     print(f"Blocks tested: {results['blocks_tested']}")
     print(f"Epochs tested: {results['epochs_tested']}")
-    print()
     
     summary = results['summary']
     print("SUMMARY:")
@@ -1531,7 +1467,6 @@ def print_validation_results(results: Dict[str, Any]):
     print(f"  Dividends match: {'✓' if summary['dividends_match'] else '✗'}")
     print(f"  Incentives match:{'✓' if summary['incentives_match'] else '✗'}")
     print(f"  Total differences: {summary['total_differences']}")
-    print()
     
     overall_success = all([
         summary['bonds_match'],
@@ -1549,7 +1484,7 @@ def print_validation_results(results: Dict[str, Any]):
             print(f"\n📁 Diagnostic artifacts saved to: {results['diagnostic_artifacts']}")
             print("   Check the diagnostic_report.json and summary.txt for detailed analysis")
         
-        print("\nDETAILED RESULTS:")
+        print("\nRESULTS OVERVIEW:")
         
         for epoch_name, epoch_data in results['comparisons'].items():
             print(f"\n{epoch_name.upper()}:")
@@ -1623,8 +1558,8 @@ def create_bond_evolution_report(
         if isinstance(real_bonds_raw, torch.Tensor) and len(real_bonds_raw.shape) == 2:
             # Normalize from fixed point (divide by 65535)
             real_bonds_normalized = real_bonds_raw / 65535.0
-            # Apply column-sum normalization like in validation
-            real_bonds_colsum = real_bonds_raw / (real_bonds_raw.sum(dim=0, keepdim=True) + 1e-8)
+            # Apply column-sum normalization to the normalized bonds (not raw)
+            real_bonds_colsum = real_bonds_normalized / (real_bonds_normalized.sum(dim=0, keepdim=True) + 1e-8)
         
         # Extract active validator and miner UIDs for this epoch
         # Try to get from case structure first, fallback to epoch_meta
@@ -1678,14 +1613,11 @@ def create_bond_evolution_report(
                     target_miner_uid < real_bonds_raw.shape[1]):
                     real_bond_raw = float(real_bonds_raw[validator_uid, target_miner_uid])
                     real_bond_normalized = real_bond_raw / 65535.0  # Fixed point normalization
-                    
                     # Successfully extracted real bond data
                 
                 if (validator_uid < real_bonds_colsum.shape[0] and 
                     target_miner_uid < real_bonds_colsum.shape[1]):
                     real_bond_colsum = float(real_bonds_colsum[validator_uid, target_miner_uid])
-                    if real_bond_colsum > 0:
-                        logger.debug(f"Validator {validator_uid} → Miner {target_miner_uid}: colsum={real_bond_colsum}")
             
             # Update summary counters
             sim_bonds_to_target_sum += sim_bond_value
@@ -1743,12 +1675,13 @@ def create_bond_evolution_report(
 def main():
     """Main validation function."""
     import argparse
-    parser = argparse.ArgumentParser(description='Validate Yuma simulator against real metagraph data (Functional)')
+    parser = argparse.ArgumentParser(description='Validate Yuma simulator against real metagraph data')
     
-    # Support both single subnet and multiple subnets
+    # Support both single subnet, multiple subnets, and top subnets
     subnet_group = parser.add_mutually_exclusive_group(required=True)
     subnet_group.add_argument('--netuid', type=int, help='Single subnet ID to validate')
     subnet_group.add_argument('--netuids', type=str, help='Comma-separated list of subnet IDs to validate (e.g., "1,3,9")')
+    subnet_group.add_argument('--top-subnets', type=int, metavar='N', help='Validate top N subnets by TAO emission')
     
     parser.add_argument('--hours', type=float, default=None, help='Number of hours of data to fetch (default: auto-calculated based on max-epochs)')
     parser.add_argument('--use-epoch-time', action='store_true', help='Calculate time range based on max-epochs * 72 minutes per epoch')
@@ -1762,6 +1695,13 @@ def main():
     # Parse subnet IDs
     if args.netuid:
         subnet_ids = [args.netuid]
+    elif args.top_subnets:
+        logger.info(f"Fetching top {args.top_subnets} subnets by TAO emission...")
+        subnet_ids = get_top_subnets_by_tao_emission(args.top_subnets)
+        if not subnet_ids:
+            logger.error("Failed to fetch top subnets from the chain")
+            return 1
+        logger.info(f"Selected top subnets: {subnet_ids}")
     else:
         try:
             subnet_ids = [int(id.strip()) for id in args.netuids.split(',')]
@@ -1799,6 +1739,15 @@ def main():
             logger.info(f"{'='*60}")
             
             all_hyperparams = fetch_multiple_subnets_hyperparameters(subnet_ids)
+            
+            # Show Yuma versions first
+            logger.info(f"\nYuma Versions:")
+            for netuid in subnet_ids:
+                if netuid in all_hyperparams:
+                    yuma_version = "YUMA3" if all_hyperparams[netuid].get('is_yuma3_on', False) else "YUMA2"
+                    logger.info(f"  Subnet {netuid}: {yuma_version}")
+                else:
+                    logger.info(f"  Subnet {netuid}: No data available")
             
             # Compare key hyperparameters
             key_params = ['bonds_moving_avg', 'liquid_alpha_enabled', 'commit_reveal_weights_enabled', 

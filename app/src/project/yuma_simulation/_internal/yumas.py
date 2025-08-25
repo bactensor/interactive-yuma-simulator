@@ -201,7 +201,7 @@ def YumaSubtensorOld(
     W_b = (1 - config.bond_penalty) * W + config.bond_penalty * W_clipped
     B = S.view(-1, 1) * W_b
     B_sum = B.sum(dim=0)
-    B = B / (B_sum + 1e-6)
+    B = B / (B_sum + 1e-9)  # Use moderately smaller epsilon
     B = torch.nan_to_num(B)
 
     a = b = torch.tensor(float("nan"))
@@ -226,7 +226,7 @@ def YumaSubtensorOld(
         B_ema = B.clone()
 
     B_ema_sum = B_ema.sum(dim=0)
-    B_ema = B_ema / (B_ema_sum + 1e-6)
+    B_ema = B_ema / (B_ema_sum + 1e-9)  # Use moderately smaller epsilon
     B_ema = torch.nan_to_num(B_ema)
 
     # === Dividend Calculation===
@@ -298,7 +298,7 @@ def YumaSubtensor(
     W_b = (1 - config.bond_penalty) * W + config.bond_penalty * W_clipped
     B = S.view(-1, 1) * W_b
     B_sum = B.sum(dim=0)
-    B = B / (B_sum + 1e-6)
+    B = B / (B_sum + 1e-9)  # Use moderately smaller epsilon
     B = torch.nan_to_num(B)
 
     a = b = torch.tensor(float("nan"))
@@ -318,13 +318,13 @@ def YumaSubtensor(
         )
     if B_old is not None:
         B_old_sum = B_old.sum(dim=0)
-        B_old = B_old/(B_old_sum + 1e-6)
+        B_old = B_old/(B_old_sum + 1e-9)  # Use moderately smaller epsilon
         B_ema = alpha * B + (1 - alpha) * B_old
     else:
         B_ema = B.clone()
 
     B_ema_sum = B_ema.sum(dim=0)
-    B_ema = B_ema / (B_ema_sum + 1e-6)
+    B_ema = B_ema / (B_ema_sum + 1e-9)  # Use moderately smaller epsilon
     B_ema = torch.nan_to_num(B_ema)
 
     # === Dividend Calculation===
@@ -396,7 +396,7 @@ def Yuma(
     W_b = (1 - config.bond_penalty) * W + config.bond_penalty * W_clipped
     B = S.view(-1, 1) * W_b
     B_sum = B.sum(dim=0)
-    B = B / (B_sum + 1e-6)
+    B = B / (B_sum + 1e-9)  # Use moderately smaller epsilon
     B = torch.nan_to_num(B)
 
     a = b = torch.tensor(float("nan"))
@@ -621,7 +621,7 @@ def Yuma2c(
     B = decay * B_old + purchase
     B = torch.min(B, capacity_per_bond)  # Enforce capacity constraints
 
-    B_norm = B / (B.sum(dim=0, keepdim=True) + 1e-6)
+    B_norm = B / (B.sum(dim=0, keepdim=True) + 1e-9)  # Use moderately smaller epsilon
 
     # === Dividends Calculation ===
     D = (B_norm * I).sum(dim=1)
