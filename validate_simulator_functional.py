@@ -86,7 +86,7 @@ def create_diagnostic_artifacts(
         },
         "config": {
             "bond_penalty": getattr(yuma_config, "bond_penalty", None) if yuma_config else None,
-            "bonds_moving_avg": getattr(yuma_config, "bonds_moving_avg", None) if yuma_config else None,
+            "bonds_moving_avg": getattr(yuma_config, "bond_moving_avg", None) if yuma_config else None,
             "liquid_alpha_enabled": getattr(yuma_config, "liquid_alpha_enabled", None) if yuma_config else None,
             "commit_reveal_weights_enabled": getattr(yuma_config, "commit_reveal_weights_enabled", None) if yuma_config else None,
             "alpha_high": getattr(yuma_config, "alpha_high", None) if yuma_config else None,
@@ -216,6 +216,7 @@ def create_diagnostic_artifacts(
         logger.info(f"Found {len(dividend_divergences)} dividend divergences for analysis")
     
     # Analyze divergent incentives
+    incentive_divergences = []
     if not epoch_data.get('incentives', {}).get('matches', False):
         incentive_divergences = analyze_divergent_incentives(
             case, sim_incentives, last_epoch_idx, tolerance
@@ -223,6 +224,19 @@ def create_diagnostic_artifacts(
         diagnostics["incentive_divergences"] = incentive_divergences
         logger.info(f"Found {len(incentive_divergences)} incentive divergences for analysis")
         log_incentive_comparison_details(incentive_divergences)
+    
+    # Generate weight analysis report for the most divergent incentive miner
+    if incentive_divergences:
+        most_divergent_incentive = incentive_divergences[0]  # Already sorted by difference
+        divergent_miner_uid = most_divergent_incentive['miner_uid']
+        
+        weight_report = create_weight_analysis_report(
+            case=case,
+            target_miner_uid=divergent_miner_uid,
+            netuid=netuid
+        )
+        diagnostics["weight_analysis_report"] = weight_report
+        logger.info(f"Generated weight analysis report for most divergent incentive miner UID {divergent_miner_uid}")
     
     # Save artifacts
     save_diagnostic_artifacts(artifact_dir, diagnostics, netuid)
@@ -555,6 +569,13 @@ def save_diagnostic_artifacts(
     with open(json_path, 'w') as f:
         json.dump(diagnostics, f, indent=2, default=str)
     logger.info(f"Diagnostic JSON report saved to: {json_path}")
+    
+    # Save weight analysis report separately if it exists
+    if "weight_analysis_report" in diagnostics:
+        weight_file = artifact_dir / "weight_analysis_report.json"
+        with open(weight_file, 'w') as f:
+            json.dump(diagnostics["weight_analysis_report"], f, indent=2, default=str)
+        logger.info(f"Weight analysis report saved to: {weight_file}")
     
     # Save human-readable summary
     summary_path = artifact_dir / "summary.txt"
@@ -890,7 +911,7 @@ def prepare_metagraph_data(
         start_date: Start date for data fetching
         end_date: End date for data fetching
         netuid: Network UID
-        max_epochs: Maximum number of epochs to validate (default: 2)
+        max_epochs: Maximum number of epochs to validate (default: 3)
         
     Returns:
         Tuple of (MetagraphCase prepared for validation, list of blocks tested)
@@ -913,17 +934,15 @@ def prepare_metagraph_data(
             logger.warning(f"Only {len(blocks)} blocks available, requested {max_epochs}")
             max_epochs = len(blocks)
         
-        if max_epochs < 2:
-            raise ValueError(f"Need at least 2 epochs for validation, got {max_epochs}")
+        if max_epochs < 3:
+            raise ValueError(f"Need at least 3 epochs for validation (epoch 0 for B_old, epochs 1+ for validation), got {max_epochs}")
         
-        # Step 3: Fetch rewards data only for first and last epochs
+        # Step 3: Fetch rewards data including bonds for all epochs
         first_block = blocks[0]
         last_block = blocks[max_epochs - 1]
         
         logger.info(f"Fetching rewards for blocks {first_block} (epoch 0) and {last_block} (epoch {max_epochs-1})")
         
-        # TODO: We need a way to fetch rewards for specific blocks
-        # For now, fetch all rewards and filter later
         rewards_data = fetch_metagraph_rewards(
             start_date=start_date,
             end_date=end_date,
@@ -1324,7 +1343,7 @@ def validate_simulator(
     end_date: datetime,
     netuid: int = 1,
     tolerance: float = 1e-4,
-    max_epochs: int = 2,
+    max_epochs: int = 3,
     generate_diagnostics: bool = True,
     bond_penalty_override: Optional[float] = None,
 ) -> Dict[str, Any]:
@@ -1336,7 +1355,7 @@ def validate_simulator(
         end_date: End date for data fetching
         netuid: Network UID to test on
         tolerance: Tolerance for numerical comparisons
-        max_epochs: Maximum number of epochs to validate (default: 2)
+        max_epochs: Maximum number of epochs to validate (default: 3)
         generate_diagnostics: Whether to generate diagnostic artifacts on failure (default: True)
         
     Returns:
@@ -1365,7 +1384,6 @@ def validate_simulator(
     last_epoch_idx = actual_epochs - 1
     
     # IMPORTANT: Use FULL bonds data (not filtered) to match simulation output
-    # Simulation outputs full 256x256 matrices, so we need full real data too
     real_bonds_last = case.metas[last_epoch_idx].get("bonds", None) if last_epoch_idx < len(case.metas) else None
     real_incentives_last = case.incentives_epochs[last_epoch_idx] if len(case.incentives_epochs) > last_epoch_idx else None
     real_dividends_last = case.dividends_epochs[last_epoch_idx] if len(case.dividends_epochs) > last_epoch_idx else None
@@ -1494,14 +1512,136 @@ def print_validation_results(results: Dict[str, Any]):
                 else:
                     status = "✓" if data['matches'] else "✗"
                     extra_info = ""
-                    if 'shape' in data:
-                        extra_info += f", shape: {data['shape']}"
                     if 'missing_validators' in data and data['missing_validators']:
                         extra_info += f", missing_validators: {data['missing_validators']}"
                     if 'missing_miners' in data and data['missing_miners']:
                         extra_info += f", missing_miners: {data['missing_miners']}"
                     
                     print(f"  {metric}: {status} (max_diff: {data.get('max_diff', 0):.6f}, mean_diff: {data.get('mean_diff', 0):.6f}, nonzero_diffs: {data.get('nonzero_diffs', 0)}{extra_info})")
+
+
+def create_weight_analysis_report(
+    case: 'MetagraphCase',
+    target_miner_uid: int,
+    netuid: int
+) -> Dict[str, Any]:
+    """
+    Create a comprehensive weight analysis report for a specific miner UID across all epochs.
+    This helps debug incentive divergences by showing exactly what weights validators are setting.
+    
+    Args:
+        case: MetagraphCase with metagraph data
+        target_miner_uid: The miner UID to analyze
+        netuid: Network UID
+        
+    Returns:
+        Dict containing detailed weight analysis across all epochs
+    """
+    
+    report = {
+        "metadata": {
+            "target_miner_uid": target_miner_uid,
+            "netuid": netuid,
+            "blocks": [case.metas[i].get("block", f"epoch_{i}") for i in range(len(case.metas))],
+            "analysis_purpose": "Debug incentive divergence by analyzing validator weights to target miner"
+        },
+        "epochs": []
+    }
+    
+    # Process each epoch
+    for epoch_idx in range(len(case.metas)):
+        epoch_meta = case.metas[epoch_idx]
+        
+        # Get weight matrix for this epoch
+        W_full = epoch_meta.get("W", None)
+        if W_full is None or not isinstance(W_full, torch.Tensor):
+            continue
+            
+        # Get hotkeys for this epoch
+        hotkeys = epoch_meta.get("hotkeys", [])
+        if target_miner_uid >= len(hotkeys):
+            continue
+            
+        target_hotkey = hotkeys[target_miner_uid]
+        
+        # Get validator info for this epoch
+        validator_uids = case.valid_indices_epochs[epoch_idx] if epoch_idx < len(case.valid_indices_epochs) else []
+        
+        epoch_data = {
+            "epoch": epoch_idx,
+            "block": epoch_meta.get("block", f"epoch_{epoch_idx}"),
+            "target_miner_hotkey": target_hotkey[:20] + "..." if len(target_hotkey) > 20 else target_hotkey,
+            "validators": {},
+            "weight_statistics": {
+                "total_weight_to_target": 0.0,
+                "num_validators_setting_weight": 0,
+                "max_weight": 0.0,
+                "min_nonzero_weight": float('inf'),
+                "weight_distribution": []
+            }
+        }
+        
+        total_weight = 0.0
+        validators_with_weight = 0
+        all_weights = []
+        
+        # Analyze each validator's weight to the target miner
+        for validator_uid in validator_uids:
+            if validator_uid >= W_full.shape[0]:
+                continue
+                
+            # Get validator info
+            validator_hotkey = hotkeys[validator_uid] if validator_uid < len(hotkeys) else f"UID{validator_uid}"
+            validator_hotkey_short = validator_hotkey[:20] + "..." if len(validator_hotkey) > 20 else validator_hotkey
+            
+            # Get weight from validator to target miner
+            weight_to_target = float(W_full[validator_uid, target_miner_uid])
+            
+            # Get validator's stake
+            S = epoch_meta.get("S", torch.zeros(256))
+            stake = float(S[validator_uid]) if validator_uid < S.shape[0] else 0.0
+            
+            # Get validator's total outgoing weights (row sum)
+            total_outgoing = float(W_full[validator_uid, :].sum())
+            
+            # Store validator data
+            epoch_data["validators"][f"uid_{validator_uid}"] = {
+                "validator_uid": validator_uid,
+                "validator_hotkey": validator_hotkey_short,
+                "weight_to_target": weight_to_target,
+                "weight_percentage_of_validator": (weight_to_target / total_outgoing * 100) if total_outgoing > 0 else 0.0,
+                "validator_stake": stake,
+                "validator_total_outgoing_weights": total_outgoing
+            }
+            
+            # Update statistics
+            total_weight += weight_to_target
+            if weight_to_target > 0:
+                validators_with_weight += 1
+                all_weights.append(weight_to_target)
+                epoch_data["weight_statistics"]["max_weight"] = max(epoch_data["weight_statistics"]["max_weight"], weight_to_target)
+                if weight_to_target < epoch_data["weight_statistics"]["min_nonzero_weight"]:
+                    epoch_data["weight_statistics"]["min_nonzero_weight"] = weight_to_target
+        
+        # Finalize statistics
+        epoch_data["weight_statistics"]["total_weight_to_target"] = total_weight
+        epoch_data["weight_statistics"]["num_validators_setting_weight"] = validators_with_weight
+        epoch_data["weight_statistics"]["weight_distribution"] = sorted(all_weights, reverse=True)
+        
+        if epoch_data["weight_statistics"]["min_nonzero_weight"] == float('inf'):
+            epoch_data["weight_statistics"]["min_nonzero_weight"] = 0.0
+        
+        # Add consensus weight calculation info
+        if len(all_weights) > 0:
+            epoch_data["weight_statistics"]["mean_weight"] = sum(all_weights) / len(all_weights)
+            epoch_data["weight_statistics"]["median_weight"] = sorted(all_weights)[len(all_weights)//2] if all_weights else 0.0
+        else:
+            epoch_data["weight_statistics"]["mean_weight"] = 0.0
+            epoch_data["weight_statistics"]["median_weight"] = 0.0
+            
+        report["epochs"].append(epoch_data)
+    
+    return report
 
 
 def create_bond_evolution_report(
@@ -1687,7 +1827,7 @@ def main():
     parser.add_argument('--use-epoch-time', action='store_true', help='Calculate time range based on max-epochs * 72 minutes per epoch')
     parser.add_argument('--days-ago', type=int, default=1, help='Days ago to end data fetch (default: 1)')
     parser.add_argument('--tolerance', type=float, default=1e-4, help='Numerical tolerance for comparisons (default: 1e-4)')
-    parser.add_argument('--max-epochs', type=int, default=2, help='Maximum number of epochs to validate (default: 2)')
+    parser.add_argument('--max-epochs', type=int, default=3, help='Maximum number of epochs to validate (default: 3)')
     parser.add_argument('--no-diagnostics', action='store_true', help='Disable diagnostic artifact generation on failure')
     parser.add_argument('--bond-penalty-override', type=float, default=None, help='Override bond_penalty (e.g., 1.0) for parity testing')
     args = parser.parse_args()
@@ -1796,6 +1936,8 @@ def main():
                     
             except Exception as e:
                 logger.error(f"Validation failed for subnet {netuid}: {e}")
+                import traceback
+                traceback.print_exc()
                 all_results[netuid] = {'error': str(e), 'success': False}
                 all_success = False
         
