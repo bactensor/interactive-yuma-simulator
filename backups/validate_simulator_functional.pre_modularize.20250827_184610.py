@@ -134,18 +134,7 @@ def create_diagnostic_artifacts(
         logger.info(f"Found {len(bond_divergences)} bond divergences for analysis")
 
         # Generate bond evolution report for the most divergent validator-miner pair
-        # Pick the largest divergence where BOTH simulated and real bonds are non-zero
         if bond_divergences:
-            # max_divergence = None
-            # for div in bond_divergences:
-            #     bond_comp = div['bond_comparison']
-            #     if bond_comp['expected'] > 0 and bond_comp['simulated'] > 0:  # Both non-zero
-            #         max_divergence = div
-            #         break
-            
-            # # Fallback to largest divergence if no non-zero pairs found
-            # if max_divergence is None:
-            #     max_divergence = bond_divergences[0]
             max_divergence = bond_divergences[0]  # Already sorted by difference
             max_validator_uid = max_divergence['validator_uid']
             max_target_uid = max_divergence['target_uid']
@@ -1037,7 +1026,8 @@ def compare_bonds(
     validators_epoch: List[str],
     epoch_hotkeys: List[str],
     tolerance: float,
-    case=None
+    case=None,
+    sim_epoch_idx: Optional[int] = None
 ) -> Dict[str, Any]:
     """
     Compare simulation bonds with real bonds.
@@ -1058,8 +1048,17 @@ def compare_bonds(
             'matches': False
         }
     
-    # Use the last simulation bonds output
-    sim_bonds_epoch = sim_bonds[-1]  # Shape: [num_validators, 256]    
+    # Use the correct simulation epoch based on whether epoch 0 bonds were used as B_old
+    if sim_epoch_idx is not None:
+        if sim_epoch_idx < 0 or sim_epoch_idx >= len(sim_bonds):
+            return {
+                'error': f'Invalid sim_epoch_idx {sim_epoch_idx} for {len(sim_bonds)} simulation epochs',
+                'matches': False
+            }
+        sim_bonds_epoch = sim_bonds[sim_epoch_idx]  # Shape: [num_validators, 256]
+    else:
+        # Fallback to last epoch if not specified
+        sim_bonds_epoch = sim_bonds[-1]  # Shape: [num_validators, 256]    
     # Extract validator rows from full real bonds matrix
     validator_positions = []
     for i, validator_hotkey in enumerate(validators_epoch):
@@ -1281,7 +1280,8 @@ def compare_incentives(
     sim_incentives_per_epoch: Dict,
     real_incentives_epoch1: torch.Tensor,
     miners: List[str],
-    tolerance: float
+    tolerance: float,
+    sim_epoch_idx: Optional[int] = None
 ) -> Dict[str, Any]:
     """
     Compare simulation incentives with real incentives (both already filtered).
@@ -1301,11 +1301,16 @@ def compare_incentives(
             'matches': False
         }
     
-    # Build simulation incentives tensor
+    # Build simulation incentives tensor using the correct epoch
     sim_inc_values = []
     for miner_hotkey in miners:
         if miner_hotkey in sim_incentives_per_epoch and len(sim_incentives_per_epoch[miner_hotkey]) > 0:
-            sim_inc_values.append(sim_incentives_per_epoch[miner_hotkey][-1])
+            incentive_list = sim_incentives_per_epoch[miner_hotkey]
+            if sim_epoch_idx is not None and sim_epoch_idx < len(incentive_list):
+                sim_inc_values.append(incentive_list[sim_epoch_idx])
+            else:
+                # Fallback to last epoch
+                sim_inc_values.append(incentive_list[-1])
         else:
             sim_inc_values.append(0.0)
     
@@ -1379,9 +1384,27 @@ def validate_simulator(
         yuma_config=yuma_config
     )
     
-    # 4. Extract real data for comparison (last epoch)
+    # 4. Extract real data for comparison
     actual_epochs = case.num_epochs
     last_epoch_idx = actual_epochs - 1
+    
+    # Check if epoch 0 bonds were used as B_old
+    has_epoch0_bonds = (hasattr(case, 'bonds_epochs') and 
+                       len(case.bonds_epochs) > 0 and 
+                       case.bonds_epochs[0] is not None)
+    
+    # If epoch 0 bonds were used as B_old:
+    # - sim_bonds[0] corresponds to real epoch 1 (processed with epoch 0 bonds)
+    # - sim_bonds[1] corresponds to real epoch 2, etc.
+    # So we compare sim_bonds[last-1] with real epoch[last]
+    if has_epoch0_bonds:
+        # Simulation outputs are offset by 1
+        sim_comparison_idx = last_epoch_idx - 1
+        logger.info(f"Epoch 0 bonds used as B_old: comparing sim_bonds[{sim_comparison_idx}] with real epoch {last_epoch_idx}")
+    else:
+        # Direct correspondence
+        sim_comparison_idx = last_epoch_idx
+        logger.info(f"No epoch 0 bonds: comparing sim_bonds[{sim_comparison_idx}] with real epoch {last_epoch_idx}")
     
     # IMPORTANT: Use FULL bonds data (not filtered) to match simulation output
     real_bonds_last = case.metas[last_epoch_idx].get("bonds", None) if last_epoch_idx < len(case.metas) else None
@@ -1392,7 +1415,9 @@ def validate_simulator(
     validation_results = {
         'blocks_tested': tested_blocks,
         'epochs_tested': last_epoch_idx,  # We test the last epoch
-        'epoch_0_bonds_used_as_input': True,
+        'epoch_0_bonds_used_as_B_old': has_epoch0_bonds,
+        'simulation_epoch_offset': 1 if has_epoch0_bonds else 0,
+        'comparing': f'sim_epoch_{sim_comparison_idx}_with_real_epoch_{last_epoch_idx}',
         'yuma_version': yuma_version,
         'comparisons': {},
         'summary': {
@@ -1412,7 +1437,8 @@ def validate_simulator(
         case.validators_epochs[last_epoch_idx] if len(case.validators_epochs) > last_epoch_idx else [],
         case.metas[last_epoch_idx]["hotkeys"] if last_epoch_idx < len(case.metas) else [],
         tolerance,
-        case
+        case,
+        sim_epoch_idx=sim_comparison_idx  # Pass the correct simulation epoch to compare
     )
     epoch_results['bonds'] = bonds_result
     
@@ -1420,9 +1446,17 @@ def validate_simulator(
         validation_results['summary']['bonds_match'] = False
         validation_results['summary']['total_differences'] += bonds_result.get('nonzero_diffs', 0)
     
-    # 8. Compare dividends - no hotkey mapping needed!
+    # 8. Compare dividends - extract correct epoch
+    # Extract dividends for the correct simulation epoch
+    sim_dividends_epoch = {}
+    for validator_key, dividends_list in sim_normalized_dividends.items():
+        if dividends_list and len(dividends_list) > sim_comparison_idx:
+            sim_dividends_epoch[validator_key] = dividends_list[sim_comparison_idx]
+        else:
+            logger.warning(f"Missing dividend data for validator {validator_key} at epoch {sim_comparison_idx}")
+    
     dividends_result = compare_dividends(
-        sim_normalized_dividends,
+        sim_dividends_epoch,
         real_dividends_last,
         case.validators_epochs[last_epoch_idx] if len(case.validators_epochs) > last_epoch_idx else [],
         tolerance
@@ -1433,12 +1467,13 @@ def validate_simulator(
         validation_results['summary']['dividends_match'] = False
         validation_results['summary']['total_differences'] += dividends_result.get('nonzero_diffs', 0)
     
-    # 9. Compare incentives - no mapping needed!
+    # 9. Compare incentives - pass the full dict but specify which epoch to use
     incentives_result = compare_incentives(
         sim_incentives_per_epoch,
         real_incentives_last,
         case.servers[last_epoch_idx] if len(case.servers) > last_epoch_idx else [],
-        tolerance
+        tolerance,
+        sim_epoch_idx=sim_comparison_idx
     )
     epoch_results['incentives'] = incentives_result
     
@@ -1563,6 +1598,9 @@ def create_weight_analysis_report(
             continue
             
         target_hotkey = hotkeys[target_miner_uid]
+        if target_hotkey is None:
+            logger.warning(f"Target miner UID {target_miner_uid} has None hotkey in epoch {epoch_idx}, skipping")
+            continue
         
         # Get validator info for this epoch
         validator_uids = case.valid_indices_epochs[epoch_idx] if epoch_idx < len(case.valid_indices_epochs) else []
