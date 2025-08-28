@@ -27,6 +27,11 @@ from project.yuma_simulation._internal.yumas import (
 
 logger = logging.getLogger(__name__)
 
+# Debug controls for investigating bond resets on hotkey swap
+# Set DEBUG_BOND_RESET to True to log per-epoch summaries for specific UIDs
+DEBUG_BOND_RESET = True
+TARGET_DEBUG_UIDS = {171}
+
 
 def _run_simulation(
     case: BaseCase,
@@ -175,13 +180,34 @@ def _run_dynamic_simulation(
                 old_miner_indices=old_miner_indices,
             )
 
+        # Track columns that must be force-zeroed this epoch due to hotkey swap at same UID
+        changed_cols: list[int] = []
+
         # Apply "recently registered" mask: zero columns for miners that appear in current but not in previous epoch
         if epoch > 0:
-            prev_miner_indices = set(case.miner_indices_epochs[epoch - 1])
-            recent_cols = [j for j, uid in enumerate(current_miner_indices) if uid not in prev_miner_indices]
-            # Mask recently registered columns in carried state
-            if B_state is not None and recent_cols:
-                B_state[:, recent_cols] = 0.0
+            # Detect hotkey swaps at the same UID by comparing full hotkey lists
+            try:
+                prev_hotkeys = hotkeys_epochs[epoch - 1]
+                curr_hotkeys = hotkeys_epochs[epoch]
+            except Exception:
+                prev_hotkeys, curr_hotkeys = [], []
+
+            # For every UID in the subnet, if hotkey changed, mark its column
+            max_uids = min(len(prev_hotkeys), len(curr_hotkeys))
+            for uid in range(max_uids):
+                prev_hk = prev_hotkeys[uid]
+                curr_hk = curr_hotkeys[uid]
+                if prev_hk != curr_hk:
+                    try:
+                        j = current_miner_indices.index(uid)
+                        changed_cols.append(j)
+                    except ValueError:
+                        # UID not present in current mapping (shouldn't happen if mapping is full)
+                        pass
+
+            # Mask in carried state only if it exists
+            if B_state is not None and changed_cols:
+                B_state[:, changed_cols] = 0.0
 
         should_align_consensus_state = (
             C_state is not None
@@ -216,6 +242,31 @@ def _run_dynamic_simulation(
                 new_cols=cur_mins,
             )
 
+        # Debug logging before Yuma call
+        if DEBUG_BOND_RESET and epoch > 0:
+            try:
+                prev_hotkeys_dbg = hotkeys_epochs[epoch - 1]
+                curr_hotkeys_dbg = hotkeys_epochs[epoch]
+                for tgt in TARGET_DEBUG_UIDS:
+                    j_dbg = current_miner_indices.index(tgt) if tgt in current_miner_indices else None
+                    changed_dbg = None
+                    if j_dbg is not None:
+                        prev_hk_dbg = prev_hotkeys_dbg[tgt] if 0 <= tgt < len(prev_hotkeys_dbg) else None
+                        curr_hk_dbg = curr_hotkeys_dbg[tgt] if 0 <= tgt < len(curr_hotkeys_dbg) else None
+                        changed_dbg = (prev_hk_dbg != curr_hk_dbg)
+                        pre_sum = pre_max = pre_nz = None
+                        if B_state is not None and 0 <= j_dbg < B_state.shape[1]:
+                            col = B_state[:, j_dbg]
+                            pre_sum = float(col.sum().item())
+                            pre_max = float(col.max().item())
+                            pre_nz = int((col > 0).sum().item())
+                        logger.info(
+                            f"[BOND-RESET DEBUG pre] epoch={epoch} uid={tgt} prev_hk={prev_hk_dbg} curr_hk={curr_hk_dbg} "
+                            f"changed={changed_dbg} pre_sum={pre_sum} pre_max={pre_max} pre_nz={pre_nz}"
+                        )
+            except Exception as e:
+                logger.warning(f"[BOND-RESET DEBUG pre] epoch={epoch} logging failed: {e}")
+
         simulation_results, B_state, C_state, W_prev, server_consensus_weight = _call_yuma(
             epoch=epoch,
             yuma_version=yuma_version,
@@ -228,6 +279,33 @@ def _run_dynamic_simulation(
             case=case,
             yuma_config=yuma_config
         )
+
+        # Enforce on-chain behavior: when a miner hotkey changes at the same UID (or a fresh
+        # registration appears at a UID), bonds for that UID are reset to 0 across validators
+        # in the resulting state for this epoch.
+        if B_state is not None and changed_cols:
+            B_state[:, changed_cols] = 0.0
+        # Also prevent consensus carry-over on identity change to avoid influencing next epoch.
+        if C_state is not None and changed_cols:
+            C_state[changed_cols] = 0.0
+
+        # Debug logging after Yuma call and zeroing
+        if DEBUG_BOND_RESET:
+            try:
+                for tgt in TARGET_DEBUG_UIDS:
+                    j_dbg = current_miner_indices.index(tgt) if tgt in current_miner_indices else None
+                    post_sum = post_max = post_nz = None
+                    if j_dbg is not None and B_state is not None and 0 <= j_dbg < B_state.shape[1]:
+                        col = B_state[:, j_dbg]
+                        post_sum = float(col.sum().item())
+                        post_max = float(col.max().item())
+                        post_nz = int((col > 0).sum().item())
+                    logger.info(
+                        f"[BOND-RESET DEBUG post] epoch={epoch} uid={tgt} post_sum={post_sum} post_max={post_max} post_nz={post_nz} "
+                        f"changed_cols={changed_cols}"
+                    )
+            except Exception as e:
+                logger.warning(f"[BOND-RESET DEBUG post] epoch={epoch} logging failed: {e}")
         
 
         D_normalized: torch.Tensor = simulation_results["validator_reward_normalized"]

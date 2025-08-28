@@ -39,11 +39,14 @@ def main() -> int:
     group.add_argument('--netuid', type=int, help='Single subnet ID to validate')
     group.add_argument('--netuids', type=str, help='Comma-separated list of subnet IDs (e.g., "1,3,9")')
     group.add_argument('--top-subnets', type=int, metavar='N', help='Validate top N subnets by TAO emission')
-    parser.add_argument('--hours', type=float, default=None, help='Hours of data to fetch (default: based on max-epochs)')
-    parser.add_argument('--use-epoch-time', action='store_true', help='Time range = max-epochs * 72 minutes')
+    parser.add_argument('--hours', type=float, default=None, help='Hours of data to fetch (default: based on num-epochs)')
+    parser.add_argument('--use-epoch-time', action='store_true', help='Time range = num-epochs * 72 minutes (no slack)')
     parser.add_argument('--days-ago', type=int, default=1, help='Days ago to end data fetch (default: 1)')
     parser.add_argument('--tolerance', type=float, default=1e-4, help='Numerical tolerance for comparisons')
-    parser.add_argument('--max-epochs', type=int, default=3, help='Maximum number of epochs to validate')
+    parser.add_argument('--num-epochs', type=int, default=3, help='Number of epochs to validate/fetch')
+    # Block-based controls
+    parser.add_argument('--start-block', type=int, default=None, help='Start block (overrides start_date)')
+    parser.add_argument('--end-block', type=int, default=None, help='End block (overrides end_date)')
     parser.add_argument('--no-diagnostics', action='store_true', help='Disable diagnostic artifact generation on failure')
     parser.add_argument('--bond-penalty-override', type=float, default=None, help='Override bond_penalty (e.g., 1.0)')
     args = parser.parse_args()
@@ -65,22 +68,31 @@ def main() -> int:
             logger.error(f"Invalid --netuids format: {args.netuids}. Expected comma-separated integers.")
             return 1
 
-    # Time window
-    end_date = datetime.now() - timedelta(days=args.days_ago)
-    epoch_minutes = 72
-    if args.hours is None:
-        total_minutes = int(args.max_epochs * epoch_minutes * 1.2)
-        start_date = end_date - timedelta(minutes=total_minutes)
-        logger.info(f"Auto time range: {args.max_epochs} epochs * {epoch_minutes} min * 1.2 = {total_minutes} min")
-    elif args.use_epoch_time:
-        total_minutes = args.max_epochs * epoch_minutes
-        start_date = end_date - timedelta(minutes=total_minutes)
-        logger.info(f"Epoch-based time: {args.max_epochs} * {epoch_minutes} = {total_minutes} min")
-    else:
-        start_date = end_date - timedelta(hours=args.hours)
-        logger.info(f"Explicit time: {args.hours} hours")
+    # Determine fetch mode: block-based or date-based
+    block_mode = any([args.start_block is not None, args.end_block is not None, args.num_epochs is not None])
+    start_date = None
+    end_date = None
+    if not block_mode:
+        # Date-based window
+        end_date = datetime.now() - timedelta(days=args.days_ago)
+        epoch_minutes = 72
+        if args.use_epoch_time:
+            total_minutes = args.num_epochs * epoch_minutes
+            start_date = end_date - timedelta(minutes=total_minutes)
+            logger.info(f"Epoch-based time: {args.num_epochs} * {epoch_minutes} = {total_minutes} min")
+        elif args.hours is not None:
+            start_date = end_date - timedelta(hours=args.hours)
+            logger.info(f"Explicit time: {args.hours} hours")
+        else:
+            total_minutes = int(args.num_epochs * epoch_minutes * 1.2)
+            start_date = end_date - timedelta(minutes=total_minutes)
+            logger.info(f"Auto time range: {args.num_epochs} epochs * {epoch_minutes} min * 1.2 = {total_minutes} min")
 
-    logger.info(f"Validating subnets {subnet_ids} from {start_date} to {end_date}")
+        logger.info(f"Validating subnets {subnet_ids} from {start_date} to {end_date}")
+    else:
+        logger.info(
+            f"Validating subnets {subnet_ids} using blocks: start_block={args.start_block}, end_block={args.end_block}, num_epochs={args.num_epochs}"
+        )
 
     try:
         # Fetch hyperparams in one batch and reuse for each subnet (even single)
@@ -95,14 +107,16 @@ def main() -> int:
             logger.info(f"\n{'='*60}\nVALIDATING SUBNET {nuid}\n{'='*60}")
             try:
                 result = validate_simulator(
-                    start_date=start_date,
-                    end_date=end_date,
                     netuid=nuid,
                     tolerance=args.tolerance,
-                    max_epochs=args.max_epochs,
+                    num_epochs=args.num_epochs,
                     generate_diagnostics=not args.no_diagnostics,
                     bond_penalty_override=args.bond_penalty_override,
                     hyperparams_data=all_hparams.get(nuid),
+                    start_date=start_date,
+                    end_date=end_date,
+                    start_block=args.start_block,
+                    end_block=args.end_block,
                 )
                 all_results[nuid] = result
                 ok = all([

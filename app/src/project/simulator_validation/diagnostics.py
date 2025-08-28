@@ -268,7 +268,12 @@ def save_diagnostic_artifacts(
         f.write(
             f"Starting Block: {diagnostics['metadata'].get('starting_block')}\n"
         )
-        f.write(f"Blocks Tested: {diagnostics['metadata'].get('blocks_tested')}\n")
+        f.write(
+            f"Blocks Tested (anchors): {diagnostics['metadata'].get('blocks_tested')}\n"
+        )
+        f.write(
+            f"Epoch Blocks (used): {diagnostics['metadata'].get('epoch_blocks')}\n"
+        )
         f.write(f"Tolerance: {diagnostics['metadata'].get('tolerance_used')}\n\n")
 
         summary = diagnostics["summary"]
@@ -297,7 +302,10 @@ def save_diagnostic_artifacts(
                 f" (max diff: {summary.get('incentive_max_diff', 0):.6f})"
             )
         f.write("\n\n")
-        f.write(f"Blocks tested: {summary.get('blocks_tested', [])}\n")
+        f.write(f"Blocks tested (anchors): {summary.get('blocks_tested', [])}\n")
+        f.write(
+            f"Epoch blocks (used): {diagnostics['metadata'].get('epoch_blocks', [])}\n"
+        )
         f.write(f"Epochs tested: {summary.get('epochs_tested', 0)}\n\n")
 
         if diagnostics.get("bond_divergences"):
@@ -568,11 +576,14 @@ def create_diagnostic_artifacts(
 
     starting_block = validation_results.get("blocks_tested", [None])[0]
     blocks_tested = validation_results.get("blocks_tested", [])
+    # Per-epoch blocks actually used by the case (preferred for DB lookups)
+    epoch_blocks = [case.metas[i].get("block", f"epoch_{i}") for i in range(len(case.metas))]
     diagnostics: Dict[str, Any] = {
         "metadata": {
             "netuid": netuid,
             "starting_block": starting_block,
             "blocks_tested": blocks_tested,
+            "epoch_blocks": epoch_blocks,
             "tolerance_used": tolerance,
         },
         "config": {

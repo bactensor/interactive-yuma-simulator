@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime
-from typing import Tuple, List
+from typing import Tuple, List, Optional
 
 from project.core.utils import fetch_metagraph_weights_stakes, fetch_metagraph_rewards
 from project.yuma_simulation._internal.cases import MetagraphCase
@@ -9,10 +9,13 @@ logger = logging.getLogger(__name__)
 
 
 def prepare_metagraph_data(
-    start_date: datetime,
-    end_date: datetime,
+    *,
     netuid: int,
-    max_epochs: int = 2,
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+    start_block: Optional[int] = None,
+    end_block: Optional[int] = None,
+    num_epochs: int = 3,
 ) -> tuple[MetagraphCase, List[int]]:
     """
     Fetch and prepare metagraph data for validation.
@@ -20,26 +23,46 @@ def prepare_metagraph_data(
     Returns (MetagraphCase, blocks_tested).
     Raises ValueError if insufficient epochs are available.
     """
-    logger.info(f"Fetching metagraph data for up to {max_epochs} epochs...")
+    logger.info("Fetching metagraph data...")
     try:
+        if num_epochs < 3:
+            raise ValueError(
+                f"Need at least 3 epochs for validation (epoch 0 for B_old, epochs 1+ for validation), got {num_epochs}"
+            )
+
         weights_stakes_data = fetch_metagraph_weights_stakes(
-            start_date=start_date, end_date=end_date, netuid=netuid
+            netuid=netuid,
+            start_date=start_date,
+            end_date=end_date,
+            start_block=start_block,
+            end_block=end_block,
+            num_epochs=num_epochs,
         )
         blocks = weights_stakes_data.get("blocks", [])
-        if len(blocks) < max_epochs:
+        desired_epochs = num_epochs
+        if len(blocks) < desired_epochs:
             logger.warning(
-                f"Only {len(blocks)} blocks available, requested {max_epochs}"
+                f"Only {len(blocks)} blocks available, requested {desired_epochs}"
             )
-            max_epochs = len(blocks)
-        if max_epochs < 3:
+            desired_epochs = len(blocks)
+        if desired_epochs < 3:
             raise ValueError(
-                f"Need at least 3 epochs for validation (epoch 0 for B_old, epochs 1+ for validation), got {max_epochs}"
+                f"Need at least 3 epochs for validation (epoch 0 for B_old, epochs 1+ for validation), got {desired_epochs}"
             )
 
         rewards_data = fetch_metagraph_rewards(
-            start_date=start_date, end_date=end_date, netuid=netuid
+            netuid=netuid,
+            start_date=start_date,
+            end_date=end_date,
+            start_block=start_block,
+            end_block=end_block,
+            num_epochs=desired_epochs,
         )
         mg_data = {**weights_stakes_data, **rewards_data}
+        if "hotkeys" in weights_stakes_data:
+            mg_data["hotkeys"] = weights_stakes_data["hotkeys"]
+        if "labels" in weights_stakes_data:
+            mg_data["labels"] = weights_stakes_data["labels"]
     except Exception as e:
         logger.error(f"Failed to fetch metagraph data: {e}")
         raise
@@ -50,12 +73,12 @@ def prepare_metagraph_data(
         logger.error(f"Error creating MetagraphCase: {e}")
         raise
 
-    if case.num_epochs < max_epochs:
-        logger.info(f"Limiting epochs from {case.num_epochs} to {max_epochs}")
-        max_epochs = case.num_epochs
+    # Harmonize number of epochs to compare
+    effective_epochs = min(desired_epochs, case.num_epochs)
+    if case.num_epochs != effective_epochs:
+        logger.info(f"Limiting epochs from {case.num_epochs} to {effective_epochs}")
 
-    case.num_epochs = max_epochs
-    case.metas = case.metas[:max_epochs]
-    tested_blocks = blocks[:max_epochs]
+    case.num_epochs = effective_epochs
+    case.metas = case.metas[:effective_epochs]
+    tested_blocks = blocks[:effective_epochs]
     return case, tested_blocks
-

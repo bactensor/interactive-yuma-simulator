@@ -4,6 +4,7 @@ from urllib.parse import urljoin
 from datetime import datetime
 
 import requests
+from typing import Optional, Dict, Any
 import pandas as pd
 from django.conf import settings
 from django.core.cache import cache
@@ -25,6 +26,47 @@ def normalize(value: float, max_value: float) -> float:
 
 
 _CACHE_KEY = "metagraph_client_session"
+
+
+def _build_metagraph_query_params(
+    *,
+    netuid: int,
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+    start_block: Optional[int] = None,
+    end_block: Optional[int] = None,
+    num_epochs: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Build query params for metagraph endpoints with clear validation.
+
+    Rules:
+    - Exactly one of start_date or start_block must be provided.
+    - At least one of end_date, end_block, or num_epochs must be provided.
+    - For end parameters, any combination is allowed (the server resolves precedence).
+    """
+    has_start_date = start_date is not None
+    has_start_block = start_block is not None
+    if has_start_date == has_start_block:
+        raise ValueError("Provide exactly one of start_date or start_block")
+
+    if end_date is None and end_block is None and num_epochs is None:
+        raise ValueError("Provide at least one of end_date, end_block, or num_epochs")
+
+    params: Dict[str, Any] = {"netuid": netuid}
+    if start_block is not None:
+        params["start_block"] = start_block
+    else:
+        params["start_date"] = start_date.isoformat()  # type: ignore[arg-type]
+
+    if end_block is not None:
+        params["end_block"] = end_block
+    if end_date is not None:
+        params["end_date"] = end_date.isoformat()
+    if num_epochs is not None:
+        params["num_epochs"] = num_epochs
+
+    return params
 
 
 def get_metagraph_session() -> requests.Session:
@@ -67,17 +109,24 @@ def get_metagraph_session() -> requests.Session:
 
 
 def fetch_metagraph_weights_stakes(
-    start_date: datetime,
-    end_date: datetime,
+    *,
     netuid: int,
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+    start_block: Optional[int] = None,
+    end_block: Optional[int] = None,
+    num_epochs: Optional[int] = None,
 ) -> dict:
     sess = get_metagraph_session()
     url = urljoin(settings.MGRAPH_BASE_URL, "metagraph/weights_stakes/")
-    params = {
-        "start_date": start_date.isoformat(),
-        "end_date": end_date.isoformat(),
-        "netuid": netuid,
-    }
+    params = _build_metagraph_query_params(
+        netuid=netuid,
+        start_date=start_date,
+        end_date=end_date,
+        start_block=start_block,
+        end_block=end_block,
+        num_epochs=num_epochs,
+    )
 
     logger.debug("→ GET %s %r", url, params)
     r = sess.get(url, params=params, timeout=360)
@@ -109,17 +158,24 @@ def fetch_metagraph_weights_stakes(
 
 
 def fetch_metagraph_rewards(
-    start_date: datetime,
-    end_date: datetime,
+    *,
     netuid: int,
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+    start_block: Optional[int] = None,
+    end_block: Optional[int] = None,
+    num_epochs: Optional[int] = None,
 ) -> dict:
     sess = get_metagraph_session()
     url = urljoin(settings.MGRAPH_BASE_URL, "metagraph/rewards/")
-    params = {
-        "start_date": start_date.isoformat(),
-        "end_date": end_date.isoformat(),
-        "netuid": netuid,
-    }
+    params = _build_metagraph_query_params(
+        netuid=netuid,
+        start_date=start_date,
+        end_date=end_date,
+        start_block=start_block,
+        end_block=end_block,
+        num_epochs=num_epochs,
+    )
 
     logger.debug("→ GET %s %r", url, params)
     r = sess.get(url, params=params, timeout=360)

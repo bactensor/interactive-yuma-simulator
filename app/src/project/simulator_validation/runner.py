@@ -16,21 +16,31 @@ logger = logging.getLogger(__name__)
 
 
 def validate_simulator(
-    start_date: datetime,
-    end_date: datetime,
+    *,
     netuid: int = 1,
     tolerance: float = 1e-4,
-    max_epochs: int = 3,
+    num_epochs: int = 3,
     generate_diagnostics: bool = True,
     bond_penalty_override: Optional[float] = None,
     hyperparams_data: Optional[Dict[str, Any]] = None,
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+    start_block: Optional[int] = None,
+    end_block: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Validate simulator against real metagraph data."""
     logger.info(
-        f"Starting validation for netuid {netuid} from {start_date} to {end_date} (max {max_epochs} epochs)"
+        f"Starting validation for netuid {netuid}"
     )
 
-    case, tested_blocks = prepare_metagraph_data(start_date, end_date, netuid, max_epochs)
+    case, tested_blocks = prepare_metagraph_data(
+        netuid=netuid,
+        start_date=start_date,
+        end_date=end_date,
+        start_block=start_block,
+        end_block=end_block,
+        num_epochs=num_epochs,
+    )
     yuma_config, is_yuma3_on = setup_yuma_configuration(
         netuid, bond_penalty_override, hyperparams_data=hyperparams_data
     )
@@ -44,18 +54,15 @@ def validate_simulator(
 
     actual_epochs = case.num_epochs
     last_epoch_idx = actual_epochs - 1
-    has_epoch0_bonds = (
-        hasattr(case, "bonds_epochs")
-        and len(case.bonds_epochs) > 0
-        and case.bonds_epochs[0] is not None
-    )
-    sim_comparison_idx = last_epoch_idx - 1 if has_epoch0_bonds else last_epoch_idx
+    # Choose simulation epoch index robustly:
+    # - If simulator produced one output per real epoch, compare last→last
+    # - Otherwise, use the last available simulation epoch
+    num_sim_epochs = len(sim_bonds)
+    if num_sim_epochs == 0:
+        raise ValueError("Simulator produced no bond epochs")
+    sim_comparison_idx = num_sim_epochs - 1
     logger.info(
-        (
-            f"Epoch 0 bonds used as B_old: comparing sim_bonds[{sim_comparison_idx}] with real epoch {last_epoch_idx}"
-            if has_epoch0_bonds
-            else f"No epoch 0 bonds: comparing sim_bonds[{sim_comparison_idx}] with real epoch {last_epoch_idx}"
-        )
+        f"Comparing sim_bonds[{sim_comparison_idx}] with real epoch {last_epoch_idx}"
     )
 
     real_bonds_last = (
@@ -72,6 +79,13 @@ def validate_simulator(
         case.dividends_epochs[last_epoch_idx]
         if len(case.dividends_epochs) > last_epoch_idx
         else None
+    )
+
+    # For reporting only; we now compare last→last
+    has_epoch0_bonds = (
+        hasattr(case, "bonds_epochs")
+        and len(case.bonds_epochs) > 0
+        and case.bonds_epochs[0] is not None
     )
 
     validation_results: Dict[str, Any] = {

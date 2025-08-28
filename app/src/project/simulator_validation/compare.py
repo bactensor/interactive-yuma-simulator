@@ -3,6 +3,81 @@ from typing import Dict, Any, List, Optional
 
 import torch
 
+# Toggle to use active-miner column filtering. Default off per current experiments.
+# TODO Must be investigated if active miner filter is needed.
+USE_ACTIVE_MINER_FILTER: bool = False
+
+
+def _filter_real_bonds_simple(
+    *,
+    real_bonds_full_norm: torch.Tensor,
+    validators_epoch: List[str],
+    validator_positions: List[Optional[int]],
+    sim_shape: torch.Size,
+) -> torch.Tensor:
+    """
+    Build a filtered real bonds matrix without active-miner selection:
+    - Rows: match validators order for this epoch
+    - Columns: trimmed/padded to match simulator columns
+    """
+    if not validators_epoch:
+        return torch.zeros(sim_shape, dtype=real_bonds_full_norm.dtype)
+    rows = []
+    for pos in validator_positions:
+        if pos is None:
+            rows.append(torch.zeros(real_bonds_full_norm.shape[1], dtype=real_bonds_full_norm.dtype))
+        else:
+            rows.append(real_bonds_full_norm[pos])
+    real_bonds_filtered = torch.stack(rows)
+
+    # Adjust columns to sim width
+    sim_rows, sim_cols = sim_shape
+    _, real_cols = real_bonds_filtered.shape
+    if real_cols > sim_cols:
+        real_bonds_filtered = real_bonds_filtered[:, :sim_cols]
+    elif real_cols < sim_cols:
+        pad = torch.zeros((real_bonds_filtered.shape[0], sim_cols - real_cols), dtype=real_bonds_full_norm.dtype)
+        real_bonds_filtered = torch.cat([real_bonds_filtered, pad], dim=1)
+    return real_bonds_filtered
+
+
+def _filter_real_bonds_active_miners(
+    *,
+    real_bonds_full_norm: torch.Tensor,
+    validators_epoch: List[str],
+    validator_positions: List[Optional[int]],
+    sim_bonds_epoch: torch.Tensor,
+    case,
+    sim_epoch_idx: Optional[int],
+) -> torch.Tensor:
+    """
+    Build a filtered real bonds matrix using active-miner UIDs (columns) for the epoch,
+    then filter rows to match validator order. If inputs are insufficient, falls back to
+    no active-miner selection.
+    """
+    real_cols = real_bonds_full_norm
+    try:
+        miner_uids: List[int] = []
+        if case is not None and hasattr(case, "miner_indices_epochs") and sim_epoch_idx is not None:
+            if len(case.miner_indices_epochs) > sim_epoch_idx:
+                miner_uids = list(case.miner_indices_epochs[sim_epoch_idx])
+        if miner_uids and sim_bonds_epoch.shape[1] == len(miner_uids):
+            real_cols = real_bonds_full_norm[:, miner_uids]
+    except Exception:
+        real_cols = real_bonds_full_norm
+
+    if not validators_epoch:
+        return torch.zeros_like(sim_bonds_epoch)
+
+    rows = []
+    for pos in validator_positions:
+        if pos is None:
+            rows.append(torch.zeros(real_cols.shape[1], dtype=real_cols.dtype))
+        else:
+            rows.append(real_cols[pos])
+    real_bonds_filtered = torch.stack(rows)
+    return real_bonds_filtered
+
 logger = logging.getLogger(__name__)
 
 
@@ -12,6 +87,7 @@ def compare_bonds(
     validators_epoch: List[str],
     epoch_hotkeys: List[str],
     tolerance: float,
+    case=None,
     sim_epoch_idx: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Compare simulation bonds with real bonds (filtered to validator rows)."""
@@ -29,11 +105,11 @@ def compare_bonds(
     else:
         sim_bonds_epoch = sim_bonds[-1]
 
-    # Normalize real bonds to [0,1] and column-normalize
-    real_bonds_normalized = real_bonds_full / 65535.0
-    col_sums = real_bonds_normalized.sum(dim=0, keepdim=True)
-    col_sums = torch.where(col_sums > 1e-6, col_sums, torch.ones_like(col_sums))
-    real_bonds_normalized = real_bonds_normalized / col_sums
+    # Normalize full real bonds to [0,1], then column-normalize
+    real_bonds_full_norm = real_bonds_full / 65535.0
+    col_sums_full = real_bonds_full_norm.sum(dim=0, keepdim=True)
+    col_sums_full = torch.where(col_sums_full > 1e-6, col_sums_full, torch.ones_like(col_sums_full))
+    real_bonds_full_norm = real_bonds_full_norm / col_sums_full
 
     # Map validator hotkeys to uids (rows in full 256x256)
     validator_positions = []
@@ -43,14 +119,25 @@ def compare_bonds(
         except ValueError:
             validator_positions.append(None)
 
-    # Build filtered real bonds with rows in the same order as sim_bonds_epoch
-    rows = []
-    for pos in validator_positions:
-        if pos is None:
-            rows.append(torch.zeros_like(real_bonds_normalized[0]))
-        else:
-            rows.append(real_bonds_normalized[pos])
-    real_bonds_filtered = torch.stack(rows) if rows else torch.zeros_like(sim_bonds_epoch)
+    
+
+    # Choose filtering strategy
+    if USE_ACTIVE_MINER_FILTER:
+        real_bonds_filtered = _filter_real_bonds_active_miners(
+            real_bonds_full_norm=real_bonds_full_norm,
+            validators_epoch=validators_epoch,
+            validator_positions=validator_positions,
+            sim_bonds_epoch=sim_bonds_epoch,
+            case=case,
+            sim_epoch_idx=sim_epoch_idx,
+        )
+    else:
+        real_bonds_filtered = _filter_real_bonds_simple(
+            real_bonds_full_norm=real_bonds_full_norm,
+            validators_epoch=validators_epoch,
+            validator_positions=validator_positions,
+            sim_shape=sim_bonds_epoch.shape,
+        )
 
     # Sanity shape check
     if sim_bonds_epoch.shape != real_bonds_filtered.shape:
@@ -191,4 +278,3 @@ def compare_incentives(
         "matches": bool(torch.max(diff).item() < tolerance),
         "shape": list(sim_tensor.shape),
     }
-
