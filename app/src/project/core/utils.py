@@ -63,7 +63,10 @@ def _build_metagraph_query_params(
         params["end_block"] = end_block
     if end_date is not None:
         params["end_date"] = end_date.isoformat()
-    if num_epochs is not None:
+    # Only include num_epochs when no explicit end is provided.
+    # Some backends reject requests that include both an end (date/block)
+    # and num_epochs simultaneously.
+    if num_epochs is not None and end_date is None and end_block is None:
         params["num_epochs"] = num_epochs
 
     return params
@@ -135,24 +138,32 @@ def fetch_metagraph_weights_stakes(
         headers = dict(r.headers)
         body = r.text
         try:
-            err = r.json().get("error")
+            parsed = r.json()
+            err = parsed.get("error")
         except ValueError:
+            parsed = None
             err = None
 
         logger.error(
-            "metagraph weights/stakes fetch failed: %s %s\n"
+            "metagraph weights/stakes fetch failed: %s %s (url=%s)\n"
+            "Params: %r\n"
             "Response headers:\n%s\n"
             "Response body (first 500 chars):\n%s\n"
             "Parsed error: %r",
             r.status_code,
             r.reason,
+            url,
+            params,
             headers,
             body[:500],
             err,
         )
 
-        http_err = requests.HTTPError(f"{r.status_code} {r.reason}", response=r)
-        raise http_err
+        msg = (
+            f"HTTP {r.status_code} {r.reason} for {url} with params={params}. "
+            f"Details: {err or (body[:200] if body else 'no body')}"
+        )
+        raise requests.HTTPError(msg, response=r)
 
     return r.json()
 
@@ -184,23 +195,31 @@ def fetch_metagraph_rewards(
         headers = dict(r.headers)
         body = r.text
         try:
-            err = r.json().get("error")
+            parsed = r.json()
+            err = parsed.get("error")
         except ValueError:
+            parsed = None
             err = None
 
         logger.error(
-            "metagraph rewards fetch failed: %s %s\n"
+            "metagraph rewards fetch failed: %s %s (url=%s)\n"
+            "Params: %r\n"
             "Response headers:\n%s\n"
             "Response body (first 500 chars):\n%s\n"
             "Parsed error: %r",
             r.status_code,
             r.reason,
+            url,
+            params,
             headers,
             body[:500],
             err,
         )
 
-        http_err = requests.HTTPError(f"{r.status_code} {r.reason}", response=r)
-        raise http_err
+        msg = (
+            f"HTTP {r.status_code} {r.reason} for {url} with params={params}. "
+            f"Details: {err or (body[:200] if body else 'no body')}"
+        )
+        raise requests.HTTPError(msg, response=r)
 
     return r.json()

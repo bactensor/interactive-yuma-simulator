@@ -69,7 +69,8 @@ def main() -> int:
             return 1
 
     # Determine fetch mode: block-based or date-based
-    block_mode = any([args.start_block is not None, args.end_block is not None, args.num_epochs is not None])
+    # Block mode is only when explicit start/end blocks are provided.
+    block_mode = any([args.start_block is not None, args.end_block is not None])
     start_date = None
     end_date = None
     if not block_mode:
