@@ -181,7 +181,15 @@ def YumaSubtensorOld(
 
     C = compute_consensus_weights(W, S, config)
 
-    C = (C / C.sum() * 65_535).int() / 65_535
+    # Quantize consensus with rounding and a minimum unit for positive entries.
+    if torch.isfinite(C).all() and C.sum() > 0:
+        Cq = torch.round((C / C.sum()) * 65_535) / 65_535
+        eps = 1.0 / 65_535
+        positive_mask = C > 0
+        # Prevent erasing tiny positive thresholds due to quantization
+        C = torch.where(positive_mask & (Cq == 0), torch.full_like(Cq, eps), Cq)
+    else:
+        C = C
 
     # === Consensus clipped weight ===
     W_clipped = torch.min(W, C)
@@ -279,7 +287,14 @@ def YumaSubtensor(
     # === Consensus ===
     C = compute_consensus_weights(W, S, config)
 
-    C = (C / C.sum() * 65_535).int() / 65_535
+    # Quantize consensus with rounding and a minimum unit for positive entries.
+    if torch.isfinite(C).all() and C.sum() > 0:
+        Cq = torch.round((C / C.sum()) * 65_535) / 65_535
+        eps = 1.0 / 65_535
+        positive_mask = C > 0
+        C = torch.where(positive_mask & (Cq == 0), torch.full_like(Cq, eps), Cq)
+    else:
+        C = C
 
     # === Consensus clipped weight ===
     W_clipped = torch.min(W, C)
@@ -377,7 +392,14 @@ def Yuma(
 
     C = compute_consensus_weights(W, S, config)
 
-    C = (C / C.sum() * 65_535).int() / 65_535
+    # Quantize consensus with rounding and a minimum unit for positive entries.
+    if torch.isfinite(C).all() and C.sum() > 0:
+        Cq = torch.round((C / C.sum()) * 65_535) / 65_535
+        eps = 1.0 / 65_535
+        positive_mask = C > 0
+        C = torch.where(positive_mask & (Cq == 0), torch.full_like(Cq, eps), Cq)
+    else:
+        C = C
 
     # === Consensus clipped weight ===
     W_clipped = torch.min(W, C)
@@ -475,7 +497,14 @@ def Yuma2b(
 
     C = compute_consensus_weights(W, S, config)
 
-    C = (C / C.sum() * 65_535).int() / 65_535
+    # Quantize consensus with rounding and a minimum unit for positive entries.
+    if torch.isfinite(C).all() and C.sum() > 0:
+        Cq = torch.round((C / C.sum()) * 65_535) / 65_535
+        eps = 1.0 / 65_535
+        positive_mask = C > 0
+        C = torch.where(positive_mask & (Cq == 0), torch.full_like(Cq, eps), Cq)
+    else:
+        C = C
 
     # === Consensus clipped weight ===
     W_clipped = torch.min(W_prev, C)
@@ -583,7 +612,14 @@ def Yuma2c(
 
     C = compute_consensus_weights(W, S, config)
 
-    C = (C / C.sum() * 65_535).int() / 65_535
+    # Quantize consensus with rounding and a minimum unit for positive entries.
+    if torch.isfinite(C).all() and C.sum() > 0:
+        Cq = torch.round((C / C.sum()) * 65_535) / 65_535
+        eps = 1.0 / 65_535
+        positive_mask = C > 0
+        C = torch.where(positive_mask & (Cq == 0), torch.full_like(Cq, eps), Cq)
+    else:
+        C = C
 
     # === Consensus clipped weight ===
     W_clipped = torch.min(W, C)
@@ -687,7 +723,14 @@ def Yuma3(
 
     C = compute_consensus_weights(W, S, config)
 
-    C = (C / C.sum() * 65_535).int() / 65_535
+    # Quantize consensus with rounding and a minimum unit for positive entries.
+    if torch.isfinite(C).all() and C.sum() > 0:
+        Cq = torch.round((C / C.sum()) * 65_535) / 65_535
+        eps = 1.0 / 65_535
+        positive_mask = C > 0
+        C = torch.where(positive_mask & (Cq == 0), torch.full_like(Cq, eps), Cq)
+    else:
+        C = C
 
     # === Consensus clipped weight ===
     W_clipped = torch.min(W, C)

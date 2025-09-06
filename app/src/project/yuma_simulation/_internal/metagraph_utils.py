@@ -196,9 +196,10 @@ def build_W_tensor(weight_map: Dict[str, Dict[str, float]],
     # Apply diagonal masking to remove self-weights (except for uid 0)
     # This matches the Rust implementation's inplace_mask_diag_except_index
     # where owner_uid is always 0
-    for i in range(n_slots):
-        if i != 0:  # Keep uid 0's self-weight
-            W[i, i] = 0.0
+    #TODO: Confirm if its actually implemented in subtensor - there was evidence on testing sessions that its not.
+    # for i in range(n_slots):
+    #     if i != 0:  # Keep uid 0's self-weight
+    #         W[i, i] = 0.0
     
     return W
 

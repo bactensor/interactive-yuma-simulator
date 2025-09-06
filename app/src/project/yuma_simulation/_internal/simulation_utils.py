@@ -27,10 +27,88 @@ from project.yuma_simulation._internal.yumas import (
 
 logger = logging.getLogger(__name__)
 
-# Debug controls for investigating bond resets on hotkey swap
-# Set DEBUG_BOND_RESET to True to log per-epoch summaries for specific UIDs
-DEBUG_BOND_RESET = True
-TARGET_DEBUG_UIDS = {171}
+# Debug controls for investigating bond evolution
+BOND_DEBUG_ENABLED = True
+BOND_DEBUG_VALIDATOR_UID = 1    # Source validator UID to track (UID 1)
+BOND_DEBUG_MINER_UID = 205      # Target miner UID to track (UID 205)
+
+
+def _debug_log_bond(
+    epoch: int,
+    phase: str,
+    B_state: torch.Tensor | None,
+    case,
+    validators: list[str] = None,
+    miner_indices: list[int] = None,
+    weights: torch.Tensor = None,
+    extra_info: str = ""
+) -> None:
+    """Log bond value for tracked validator->miner relationship."""
+    if not BOND_DEBUG_ENABLED or B_state is None:
+        return
+    
+    validator_uid = BOND_DEBUG_VALIDATOR_UID
+    miner_uid = BOND_DEBUG_MINER_UID
+    
+    try:
+        # Get hotkeys for this epoch
+        hotkeys = case.metas[min(epoch, len(case.metas)-1)].get("hotkeys", [])
+        
+        # For init phase, use direct UIDs as indices (full 256x256 matrix)
+        if phase == "init":
+            if validator_uid < B_state.shape[0] and miner_uid < B_state.shape[1]:
+                bond_value = B_state[validator_uid, miner_uid].item()
+                
+                # Also log raw bond from case if available
+                if hasattr(case, 'bonds_epochs') and len(case.bonds_epochs) > 0:
+                    raw_bond = case.bonds_epochs[0][validator_uid, miner_uid].item()
+                    logger.info(
+                        f"[BOND] Epoch {epoch:2d} - {phase:12s} | "
+                        f"V{validator_uid:3d}->M{miner_uid:3d} = {bond_value:.6f} "
+                        f"(raw: {raw_bond}, norm: {raw_bond/65535.0:.6f}) | {extra_info}"
+                    )
+        else:
+            # For other phases, map UIDs to indices in validator/miner lists
+            if validators and miner_indices and hotkeys:
+                # Find validator index
+                validator_idx = None
+                if validator_uid < len(hotkeys):
+                    validator_hotkey = hotkeys[validator_uid]
+                    if validator_hotkey in validators:
+                        validator_idx = validators.index(validator_hotkey)
+                
+                # Find miner index
+                miner_idx = None
+                if miner_uid in miner_indices:
+                    miner_idx = miner_indices.index(miner_uid)
+                
+                if validator_idx is not None and miner_idx is not None:
+                    if validator_idx < B_state.shape[0] and miner_idx < B_state.shape[1]:
+                        bond_value = B_state[validator_idx, miner_idx].item()
+                        
+                        msg = f"[BOND] Epoch {epoch:2d} - {phase:12s} | V{validator_uid:3d}->M{miner_uid:3d} "
+                        msg += f"(idx: {validator_idx:3d}->{miner_idx:3d}) = {bond_value:.6f}"
+                        
+                        # Add weight if available
+                        if weights is not None and validator_idx < weights.shape[0] and miner_idx < weights.shape[1]:
+                            weight_value = weights[validator_idx, miner_idx].item()
+                            msg += f" [W={weight_value:.10f}]"
+                        
+                        if extra_info:
+                            msg += f" | {extra_info}"
+                        
+                        logger.info(msg)
+                elif phase in ["before_align", "after_align"]:
+                    # Log why we can't track this bond for alignment phases
+                    status = []
+                    if validator_idx is None:
+                        status.append(f"V{validator_uid} not in validators")
+                    if miner_idx is None:
+                        status.append(f"M{miner_uid} not in miners") 
+                    logger.debug(f"[BOND] Epoch {epoch} - {phase}: {', '.join(status)}")
+        
+    except Exception as e:
+        logger.debug(f"[BOND] Error tracking V{validator_uid}->M{miner_uid} at epoch {epoch}: {e}")
 
 
 def _run_simulation(
@@ -139,7 +217,7 @@ def _run_dynamic_simulation(
     # Initialize B_state with bonds from first epoch if available
     B_state: torch.Tensor | None = (
         case.bonds_epochs[0].clone()
-        if hasattr(case, 'bonds_epochs') and case.bonds_epochs[0] is not None 
+        if hasattr(case, 'bonds_epochs') and case.bonds_epochs[0] is not None
         else None
     )
     
@@ -154,9 +232,10 @@ def _run_dynamic_simulation(
 
     yuma_config = yuma_config.with_overrides(case.get_config_overrides())
 
-    for epoch in range(case.num_epochs):
+    for epoch in range(1, case.num_epochs):
         W: torch.Tensor = weights_epochs[epoch]
         S: torch.Tensor = stakes_epochs[epoch]
+
         current_validators: list[str] = case.validators_epochs[epoch]
         current_miner_indices: list[int] = case.miner_indices_epochs[epoch]
 
@@ -172,12 +251,37 @@ def _run_dynamic_simulation(
                 old_miner_indices: list[int] = case.miner_indices_epochs[epoch - 1]
             else:
                 old_validators, old_miner_indices = [], []
+            
+            # Log before alignment
+            _debug_log_bond(
+                epoch=epoch,
+                phase="before_align",
+                B_state=B_state,
+                case=case,
+                validators=old_validators,
+                miner_indices=old_miner_indices,
+                extra_info=f"Shape: {B_state.shape} -> ({current_validator_count}, {current_miner_count})"
+            )
+            
             B_state = _align_bond_state(
                 B_state=B_state,
                 current_validators=current_validators,
                 current_miner_indices=current_miner_indices,
                 old_validators=old_validators,
                 old_miner_indices=old_miner_indices,
+                case=case,
+                epoch=epoch,
+            )
+            
+            # Log after alignment
+            _debug_log_bond(
+                epoch=epoch,
+                phase="after_align",
+                B_state=B_state,
+                case=case,
+                validators=current_validators,
+                miner_indices=current_miner_indices,
+                extra_info=f"New shape: {B_state.shape}"
             )
 
         # Track columns that must be force-zeroed this epoch due to hotkey swap at same UID
@@ -242,31 +346,18 @@ def _run_dynamic_simulation(
                 new_cols=cur_mins,
             )
 
-        # Debug logging before Yuma call
-        if DEBUG_BOND_RESET and epoch > 0:
-            try:
-                prev_hotkeys_dbg = hotkeys_epochs[epoch - 1]
-                curr_hotkeys_dbg = hotkeys_epochs[epoch]
-                for tgt in TARGET_DEBUG_UIDS:
-                    j_dbg = current_miner_indices.index(tgt) if tgt in current_miner_indices else None
-                    changed_dbg = None
-                    if j_dbg is not None:
-                        prev_hk_dbg = prev_hotkeys_dbg[tgt] if 0 <= tgt < len(prev_hotkeys_dbg) else None
-                        curr_hk_dbg = curr_hotkeys_dbg[tgt] if 0 <= tgt < len(curr_hotkeys_dbg) else None
-                        changed_dbg = (prev_hk_dbg != curr_hk_dbg)
-                        pre_sum = pre_max = pre_nz = None
-                        if B_state is not None and 0 <= j_dbg < B_state.shape[1]:
-                            col = B_state[:, j_dbg]
-                            pre_sum = float(col.sum().item())
-                            pre_max = float(col.max().item())
-                            pre_nz = int((col > 0).sum().item())
-                        logger.info(
-                            f"[BOND-RESET DEBUG pre] epoch={epoch} uid={tgt} prev_hk={prev_hk_dbg} curr_hk={curr_hk_dbg} "
-                            f"changed={changed_dbg} pre_sum={pre_sum} pre_max={pre_max} pre_nz={pre_nz}"
-                        )
-            except Exception as e:
-                logger.warning(f"[BOND-RESET DEBUG pre] epoch={epoch} logging failed: {e}")
 
+        # Log before Yuma call
+        _debug_log_bond(
+            epoch=epoch,
+            phase="before_yuma",
+            B_state=B_state,
+            case=case,
+            validators=current_validators,
+            miner_indices=current_miner_indices,
+            weights=W
+        )
+        
         simulation_results, B_state, C_state, W_prev, server_consensus_weight = _call_yuma(
             epoch=epoch,
             yuma_version=yuma_version,
@@ -279,34 +370,42 @@ def _run_dynamic_simulation(
             case=case,
             yuma_config=yuma_config
         )
+        
+        # Log after Yuma call
+        _debug_log_bond(
+            epoch=epoch,
+            phase="after_yuma",
+            B_state=B_state,
+            case=case,
+            validators=current_validators,
+            miner_indices=current_miner_indices,
+            weights=W
+        )
 
         # Enforce on-chain behavior: when a miner hotkey changes at the same UID (or a fresh
         # registration appears at a UID), bonds for that UID are reset to 0 across validators
         # in the resulting state for this epoch.
         if B_state is not None and changed_cols:
+            # Log which UIDs are being reset
+            if changed_cols and BOND_DEBUG_ENABLED:
+                reset_uids = [current_miner_indices[j] for j in changed_cols if j < len(current_miner_indices)]
+                logger.info(f"[BOND] Epoch {epoch} - Resetting bonds for miner UIDs: {reset_uids}")
+            
             B_state[:, changed_cols] = 0.0
+            
+            # Log after reset
+            _debug_log_bond(
+                epoch=epoch,
+                phase="after_reset",
+                B_state=B_state,
+                case=case,
+                validators=current_validators,
+                miner_indices=current_miner_indices,
+                extra_info=f"Reset columns: {changed_cols}"
+            )
         # Also prevent consensus carry-over on identity change to avoid influencing next epoch.
         if C_state is not None and changed_cols:
-            C_state[changed_cols] = 0.0
-
-        # Debug logging after Yuma call and zeroing
-        if DEBUG_BOND_RESET:
-            try:
-                for tgt in TARGET_DEBUG_UIDS:
-                    j_dbg = current_miner_indices.index(tgt) if tgt in current_miner_indices else None
-                    post_sum = post_max = post_nz = None
-                    if j_dbg is not None and B_state is not None and 0 <= j_dbg < B_state.shape[1]:
-                        col = B_state[:, j_dbg]
-                        post_sum = float(col.sum().item())
-                        post_max = float(col.max().item())
-                        post_nz = int((col > 0).sum().item())
-                    logger.info(
-                        f"[BOND-RESET DEBUG post] epoch={epoch} uid={tgt} post_sum={post_sum} post_max={post_max} post_nz={post_nz} "
-                        f"changed_cols={changed_cols}"
-                    )
-            except Exception as e:
-                logger.warning(f"[BOND-RESET DEBUG post] epoch={epoch} logging failed: {e}")
-        
+            C_state[changed_cols] = 0.0        
 
         D_normalized: torch.Tensor = simulation_results["validator_reward_normalized"]
         
@@ -592,12 +691,18 @@ def _align_bond_state(
     current_miner_indices: list[int],
     old_validators: list[str],
     old_miner_indices: list[int],
+    case=None,
+    epoch: int = None,
 ) -> torch.Tensor:
     """
     Aligns the previous bond state (B_state) with the current epoch's validators
     and miner indices. Returns a new bond state tensor with shape
       (len(current_validators), len(current_miner_indices)),
     copying over any overlapping entries from the old bond state.
+    
+    For validators that are new or reactivating (not in old_validators), 
+    attempts to initialize their bonds from case.bonds_epochs[epoch] if available,
+    otherwise defaults to 0.
     
     Special case: If old_validators/old_miner_indices are empty (epoch 0),
     preserve the existing B_state if it already has the correct shape.
@@ -646,6 +751,29 @@ def _align_bond_state(
         # Use meshgrid-like indexing to copy the overlapping submatrix
         new_B_state[validator_tensor[:, None], miner_tensor] = \
             B_state[old_validator_tensor[:, None], old_miner_tensor]
+
+    # For new validators (not overlapping), initialize from case.bonds_epochs[epoch] if available
+    if case is not None and hasattr(case, 'bonds_epochs') and epoch is not None:
+        if 0 <= epoch < len(case.bonds_epochs):
+            epoch_bonds = case.bonds_epochs[epoch]
+            for i, validator in enumerate(current_validators):
+                if validator not in old_validator_map:
+                    for j, miner in enumerate(current_miner_indices):
+                        if miner in old_miner_map:
+                            old_j = old_miner_map[miner]
+                            new_B_state[i, j] = epoch_bonds[i, old_j] if i < epoch_bonds.shape[0] else 0.0
+                        else:
+                            new_B_state[i, j] = 0.0
+        else:
+            # If epoch index is out of range, default new validators' bonds to 0
+            for i, validator in enumerate(current_validators):
+                if validator not in old_validator_map:
+                    new_B_state[i, :] = 0.0
+    else:
+        # If no case or bonds_epochs info, default new validators' bonds to 0
+        for i, validator in enumerate(current_validators):
+            if validator not in old_validator_map:
+                new_B_state[i, :] = 0.0
 
     return new_B_state
 

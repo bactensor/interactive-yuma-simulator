@@ -73,22 +73,28 @@ def prepare_metagraph_data(
         if weights_stakes_data is None:
             assert last_err is not None
             # Fallback: try a broad date window without num_epochs so backend can choose epochs
-            try:
-                broad_start = (start_date - timedelta(days=7)) if start_date else None
-                logger.warning(
-                    f"Retrying with broad window start={broad_start}, end={original_end_date} (no num_epochs)"
-                )
-                weights_stakes_data = fetch_metagraph_weights_stakes(
-                    netuid=netuid,
-                    start_date=broad_start,
-                    end_date=original_end_date,
-                    start_block=start_block,
-                    end_block=end_block,
-                    num_epochs=None,
-                )
-                # Use the broad_start as the chosen window start for rewards alignment
-                chosen_start_date = broad_start
-            except Exception:
+            # Only attempt this if we have date-based parameters
+            if start_date or end_date:
+                try:
+                    broad_start = (start_date - timedelta(days=7)) if start_date else None
+                    logger.warning(
+                        f"Retrying with broad window start={broad_start}, end={original_end_date} (no num_epochs)"
+                    )
+                    weights_stakes_data = fetch_metagraph_weights_stakes(
+                        netuid=netuid,
+                        start_date=broad_start,
+                        end_date=original_end_date,
+                        start_block=start_block,
+                        end_block=end_block,
+                        num_epochs=None,
+                    )
+                    # Use the broad_start as the chosen window start for rewards alignment
+                    chosen_start_date = broad_start
+                except Exception:
+                    raise last_err
+            else:
+                # If using block-based parameters, don't attempt date-based fallback
+                logger.error(f"Failed to fetch data with blocks {start_block}-{end_block}")
                 raise last_err
         blocks = weights_stakes_data.get("blocks", [])
         desired_epochs = num_epochs

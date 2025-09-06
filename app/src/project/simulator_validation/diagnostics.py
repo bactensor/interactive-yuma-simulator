@@ -14,6 +14,7 @@ def analyze_divergent_bonds_with_weights(
     sim_bonds: List[torch.Tensor],
     epoch_idx: int,
     tolerance: float,
+    sim_comparison_idx: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     divergences: List[Dict[str, Any]] = []
     if not case.weights_epochs:
@@ -38,7 +39,11 @@ def analyze_divergent_bonds_with_weights(
         except ValueError:
             continue
 
-    sim_bonds_epoch = sim_bonds[-1] if sim_bonds else None
+    # Use provided sim_comparison_idx or default to last epoch
+    if sim_comparison_idx is not None and 0 <= sim_comparison_idx < len(sim_bonds):
+        sim_bonds_epoch = sim_bonds[sim_comparison_idx]
+    else:
+        sim_bonds_epoch = sim_bonds[-1] if sim_bonds else None
     if sim_bonds_epoch is None:
         return divergences
 
@@ -175,13 +180,18 @@ def analyze_divergent_incentives(
     sim_incentives: Dict,
     epoch_idx: int,
     tolerance: float,
+    sim_comparison_idx: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     divergences: List[Dict[str, Any]] = []
+    logger.info(f"analyze_divergent_incentives: epoch_idx={epoch_idx}, case.metas length={len(case.metas)}")
     if epoch_idx >= len(case.metas):
+        logger.warning(f"epoch_idx {epoch_idx} >= case.metas length {len(case.metas)}")
         return divergences
     epoch_meta = case.metas[epoch_idx]
     real_incentives = epoch_meta.get("incentives", None)
+    logger.info(f"real_incentives type: {type(real_incentives)}, is None: {real_incentives is None}")
     if real_incentives is None or not isinstance(real_incentives, torch.Tensor):
+        logger.warning(f"No real_incentives tensor found in epoch_meta for epoch {epoch_idx}")
         return divergences
     miner_uids = (
         case.miner_indices_epochs[epoch_idx]
@@ -189,17 +199,25 @@ def analyze_divergent_incentives(
         else []
     )
     hotkeys = epoch_meta.get("hotkeys", [])
+    logger.info(f"miner_uids: {miner_uids}, hotkeys length: {len(hotkeys)}")
+    logger.info(f"sim_incentives keys: {list(sim_incentives.keys()) if isinstance(sim_incentives, dict) else type(sim_incentives)}")
     for miner_idx, miner_uid in enumerate(miner_uids):
-        if miner_idx >= len(hotkeys):
-            break
-        miner_hotkey = hotkeys[miner_idx]
+        if miner_uid >= len(hotkeys):
+            continue
+        miner_hotkey = hotkeys[miner_uid]
         sim_incentive = 0.0
         if (
             miner_hotkey in sim_incentives
             and isinstance(sim_incentives[miner_hotkey], list)
             and len(sim_incentives[miner_hotkey]) > 0
         ):
-            sim_incentive = float(sim_incentives[miner_hotkey][-1])
+            seq = sim_incentives[miner_hotkey]
+            # Use sim_comparison_idx if provided, otherwise use last epoch
+            if sim_comparison_idx is not None and 0 <= sim_comparison_idx < len(seq):
+                sim_incentive = float(seq[sim_comparison_idx])
+            elif seq:
+                sim_incentive = float(seq[-1])
+            logger.debug(f"Miner {miner_uid} ({miner_hotkey[:10]}): sim_incentive={sim_incentive}, seq_len={len(seq)}, sim_comparison_idx={sim_comparison_idx}")
         real_incentive = (
             float(real_incentives[miner_uid])
             if miner_uid < real_incentives.shape[0]
@@ -486,8 +504,6 @@ def create_bond_evolution_report(
         "epochs": [],
     }
     for epoch_idx in range(len(case.metas)):
-        if epoch_idx >= len(sim_bonds):
-            break
         epoch_meta = case.metas[epoch_idx]
         hotkeys = epoch_meta.get("hotkeys", [])
         W_full = epoch_meta.get("W", None)
@@ -510,7 +526,17 @@ def create_bond_evolution_report(
             "validators": {},
             "summary": {},
         }
-        sim_bonds_epoch = sim_bonds[epoch_idx]
+        # Get simulator bonds with correct alignment:
+        # Simulator processes epochs 1-4, producing sim_bonds[0-3]
+        # - sim_bonds[0] = result after processing epoch 1
+        # So for diagnostic epoch i, we want sim_bonds[i-1] (except epoch 0 has no simulator output)
+        if epoch_idx == 0:
+            # Epoch 0 is initialization - no simulator output yet
+            sim_bonds_epoch = None
+        else:
+            # For epoch i>0, get sim_bonds[i-1] (simulator result after processing epoch i)
+            sim_idx = epoch_idx - 1
+            sim_bonds_epoch = sim_bonds[sim_idx] if sim_idx < len(sim_bonds) else None
         sim_bonds_to_target_sum = 0.0
         sim_bonds_to_target_nonzero = 0
         for validator_uid in validator_uids:
@@ -527,7 +553,7 @@ def create_bond_evolution_report(
                 row_idx = valid_uids.index(validator_uid) if validator_uid in valid_uids else None
             except Exception:
                 row_idx = None
-            if row_idx is not None and 0 <= row_idx < sim_bonds_epoch.shape[0]:
+            if sim_bonds_epoch is not None and row_idx is not None and 0 <= row_idx < sim_bonds_epoch.shape[0]:
                 sim_bond = float(sim_bonds_epoch[row_idx, target_miner_uid].item())
             else:
                 sim_bond = 0.0
@@ -569,6 +595,7 @@ def create_diagnostic_artifacts(
     tolerance: float,
     timestamp: Optional[str] = None,
     yuma_config: Optional[Any] = None,
+    sim_comparison_idx: Optional[int] = None,
 ) -> Dict[str, Any]:
     timestamp = timestamp or datetime.now().strftime("%Y%m%d_%H%M%S")
     artifact_dir = Path(f"validation_artifacts/{timestamp}_subnet_{netuid}")
@@ -642,7 +669,7 @@ def create_diagnostic_artifacts(
 
     if not epoch_data.get("bonds", {}).get("matches", False):
         bond_divergences = analyze_divergent_bonds_with_weights(
-            case, sim_bonds, last_epoch_idx, tolerance
+            case, sim_bonds, last_epoch_idx, tolerance, sim_comparison_idx
         )
         diagnostics["bond_divergences"] = bond_divergences
         if bond_divergences:
@@ -684,7 +711,7 @@ def create_diagnostic_artifacts(
                         f.write(
                             f"    Real (col sum): {focus_val['bonds']['real_col_sum']}\n\n"
                         )
-                    f.write(f"All validators → UID {max_target_uid}:\n")
+                    f.write(f"All validators → UID {max_target_uid} (Union):\n")
                     for _, val_data in ep["validators"].items():
                         uid = val_data["validator_uid"]
                         if uid != max_validator_uid:
@@ -694,12 +721,71 @@ def create_diagnostic_artifacts(
                             f.write(
                                 f"  UID {uid:3d}: sim={sim_bond:7.4f}, real={real_bond:7.4f}, weight={weight}\n"
                             )
+                    
+                    # Get raw bond matrices to find ALL non-zero bonds
+                    epoch_idx = ep["epoch"]
+                    sim_bonds_epoch = (
+                        sim_bonds[epoch_idx - 1]
+                        if epoch_idx > 0 and (epoch_idx - 1) < len(sim_bonds)
+                        else None
+                    )
+                    epoch_meta = case.metas[epoch_idx] if epoch_idx < len(case.metas) else None
+                    real_bonds_full = epoch_meta.get("bonds", None) if epoch_meta else None
+                    W_full = epoch_meta.get("W", None) if epoch_meta else None
+                    
+                    # Add section for all non-zero simulator bonds (scan full matrix)
+                    f.write(f"\nSimulator non-zero bonds → UID {max_target_uid}:\n")
+                    sim_nonzero_data = []
+                    if sim_bonds_epoch is not None and epoch_idx < len(case.valid_indices_epochs):
+                        valid_uids = case.valid_indices_epochs[epoch_idx]
+                        for row_idx, validator_uid in enumerate(valid_uids):
+                            if row_idx < sim_bonds_epoch.shape[0] and max_target_uid < sim_bonds_epoch.shape[1]:
+                                sim_bond = float(sim_bonds_epoch[row_idx, max_target_uid].item())
+                                if sim_bond > 0:
+                                    weight = float(W_full[validator_uid, max_target_uid]) if (W_full is not None and validator_uid < W_full.shape[0] and max_target_uid < W_full.shape[1]) else 0.0
+                                    sim_nonzero_data.append((validator_uid, sim_bond, weight))
+                    
+                    # Sort by sim bond value descending
+                    sim_nonzero_data.sort(key=lambda x: x[1], reverse=True)
+                    for uid, sim_bond, weight in sim_nonzero_data:
+                        f.write(
+                            f"  UID {uid:3d}: sim={sim_bond:7.4f}, weight={weight}\n"
+                        )
+                    if len(sim_nonzero_data) == 0:
+                        f.write("  (No non-zero simulator bonds found)\n")
+                    
+                    # Add section for all non-zero real bonds (scan full matrix)
+                    f.write(f"\nReal data non-zero bonds → UID {max_target_uid}:\n")
+                    real_nonzero_data = []
+                    if real_bonds_full is not None and max_target_uid < real_bonds_full.shape[1]:
+                        for validator_uid in range(real_bonds_full.shape[0]):
+                            real_bond_raw = float(real_bonds_full[validator_uid, max_target_uid].item())
+                            if real_bond_raw > 0:
+                                # Normalize real bond
+                                real_bond_norm = real_bond_raw / 65535.0
+                                col_sum = (real_bonds_full[:, max_target_uid] / 65535.0).sum().item()
+                                real_bond_norm = real_bond_norm / (col_sum + 1e-6) if col_sum > 1e-6 else 0.0
+                                weight = float(W_full[validator_uid, max_target_uid]) if (W_full is not None and validator_uid < W_full.shape[0] and max_target_uid < W_full.shape[1]) else 0.0
+                                real_nonzero_data.append((validator_uid, real_bond_norm, weight, real_bond_raw))
+                    
+                    # Sort by real bond value descending
+                    real_nonzero_data.sort(key=lambda x: x[1], reverse=True)
+                    for uid, real_bond, weight, raw_bond in real_nonzero_data:
+                        f.write(
+                            f"  UID {uid:3d}: real={real_bond:7.4f} (raw={raw_bond:.0f}), weight={weight}\n"
+                        )
+                    if len(real_nonzero_data) == 0:
+                        f.write("  (No non-zero real bonds found)\n")
+                    
                     f.write("\nSummary:\n")
                     f.write(
                         f"  Total sim bonds to target: {ep['summary']['sim_bonds_to_target_sum']}\n"
                     )
                     f.write(
-                        f"  Non-zero bonds to target: {ep['summary']['sim_bonds_to_target_nonzero']}\n"
+                        f"  Non-zero sim bonds count: {len(sim_nonzero_data)}\n"
+                    )
+                    f.write(
+                        f"  Non-zero real bonds count: {len(real_nonzero_data)}\n"
                     )
 
     if not epoch_data.get("dividends", {}).get("matches", False):
@@ -709,12 +795,18 @@ def create_diagnostic_artifacts(
         diagnostics["dividend_divergences"] = dividend_divergences
 
     incentive_divergences: List[Dict[str, Any]] = []
-    if not epoch_data.get("incentives", {}).get("matches", False):
+    incentives_match = epoch_data.get("incentives", {}).get("matches", False)
+    logger.info(f"Incentive divergence check: incentives_match={incentives_match}, epoch_data_incentives={epoch_data.get('incentives', {})}")
+    if not incentives_match:
+        logger.info(f"Analyzing incentive divergences for epoch {last_epoch_idx}")
         incentive_divergences = analyze_divergent_incentives(
-            case, sim_incentives, last_epoch_idx, tolerance
+            case, sim_incentives, last_epoch_idx, tolerance, sim_comparison_idx
         )
+        logger.info(f"Found {len(incentive_divergences)} incentive divergences")
         diagnostics["incentive_divergences"] = incentive_divergences
         log_incentive_comparison_details(incentive_divergences)
+    else:
+        logger.info("Skipping incentive divergence analysis - incentives match")
 
     if incentive_divergences:
         most_divergent = incentive_divergences[0]

@@ -54,15 +54,16 @@ def validate_simulator(
 
     actual_epochs = case.num_epochs
     last_epoch_idx = actual_epochs - 1
-    # Choose simulation epoch index robustly:
-    # - If simulator produced one output per real epoch, compare last→last
-    # - Otherwise, use the last available simulation epoch
     num_sim_epochs = len(sim_bonds)
     if num_sim_epochs == 0:
         raise ValueError("Simulator produced no bond epochs")
+    
+    # Compare the last simulator output with the last real epoch
     sim_comparison_idx = num_sim_epochs - 1
+    
     logger.info(
-        f"Comparing sim_bonds[{sim_comparison_idx}] with real epoch {last_epoch_idx}"
+        f"Comparing sim_bonds[{sim_comparison_idx}] (state after epoch {sim_comparison_idx+1}) "
+        f"with real epoch {last_epoch_idx} (state at start of epoch {last_epoch_idx})"
     )
 
     real_bonds_last = (
@@ -81,18 +82,10 @@ def validate_simulator(
         else None
     )
 
-    # For reporting only; we now compare last→last
-    has_epoch0_bonds = (
-        hasattr(case, "bonds_epochs")
-        and len(case.bonds_epochs) > 0
-        and case.bonds_epochs[0] is not None
-    )
 
     validation_results: Dict[str, Any] = {
         "blocks_tested": tested_blocks,
         "epochs_tested": last_epoch_idx,
-        "epoch_0_bonds_used_as_B_old": has_epoch0_bonds,
-        "simulation_epoch_offset": 1 if has_epoch0_bonds else 0,
         "comparing": f"sim_epoch_{sim_comparison_idx}_with_real_epoch_{last_epoch_idx}",
         "yuma_version": yuma_version,
         "comparisons": {},
@@ -181,6 +174,7 @@ def validate_simulator(
             sim_incentives=sim_incentives_per_epoch,
             tolerance=tolerance,
             yuma_config=yuma_config,
+            sim_comparison_idx=sim_comparison_idx,
         )
         validation_results["diagnostic_artifacts"] = diagnostic_info.get(
             "artifact_path", None
