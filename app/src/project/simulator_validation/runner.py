@@ -45,6 +45,23 @@ def validate_simulator(
         netuid, bond_penalty_override, hyperparams_data=hyperparams_data
     )
 
+    # Debug: print dumper stakes for epoch 0 and 1 (full vectors from metas)
+    try:
+        if len(case.metas) >= 1 and isinstance(case.metas[0].get("S", None), torch.Tensor):
+            S0 = case.metas[0]["S"]
+            logger.info(
+                "[DUMPER] Stakes epoch 0: shape=%s sum=%.6f\n%s",
+                tuple(S0.shape), float(S0.sum().item()), S0.tolist(),
+            )
+        if len(case.metas) >= 2 and isinstance(case.metas[1].get("S", None), torch.Tensor):
+            S1 = case.metas[1]["S"]
+            logger.info(
+                "[DUMPER] Stakes epoch 1: shape=%s sum=%.6f\n%s",
+                tuple(S1.shape), float(S1.sum().item()), S1.tolist(),
+            )
+    except Exception as e:
+        logger.warning(f"Failed to log dumper stakes for epochs 0/1: {e}")
+
     yuma_simulation_name = YumaSimulationNames().YUMA3 if is_yuma3_on else YumaSimulationNames().YUMA2
     yuma_version = "YUMA3" if is_yuma3_on else "YUMA2"
     logger.info(f"Running {yuma_version} simulation...")
@@ -143,12 +160,17 @@ def validate_simulator(
             miners_epoch = [epoch_hotkeys[uid] if 0 <= uid < len(epoch_hotkeys) else f'UID{uid}' for uid in miner_uids]
         except Exception:
             miners_epoch = []
+    # Important: incentive time-series in the simulator dict are indexed by real epoch index
+    # (index 0 corresponds to epoch 0 placeholder, index k to epoch k). So compare against
+    # last_epoch_idx rather than sim_comparison_idx.
     inc_result = compare_incentives(
         sim_incentives_per_epoch,
         real_incentives_last,
         miners_epoch,
         tolerance,
-        sim_comparison_idx,
+        last_epoch_idx,
+        case=case,
+        yuma_config=yuma_config,
     )
     epoch_results["incentives"] = inc_result
     if not inc_result.get("matches", False):

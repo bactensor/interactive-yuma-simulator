@@ -9,6 +9,7 @@ from .metagraph_utils import (
     pick_validators, run_block_diagnostics,
 )
 import random
+import os
 from django.conf import settings
 
 
@@ -145,7 +146,13 @@ class MetagraphCase(BaseCase):
         # For each metagraph (epoch), compute the validators and miner indices.
         for idx, meta in enumerate(self.metas):
             stakes_tensor = meta["S"]  # shape [n_validators]
-            mask = stakes_tensor >= 1000
+            # Allow overriding min stake threshold for validation (parity): default 0.0
+            try:
+                min_stake_str = os.getenv("SIM_VALIDATION_MIN_STAKE", "1000")
+                min_stake = float(min_stake_str)
+            except Exception:
+                min_stake = 1000.0
+            mask = stakes_tensor >= min_stake
 
             valid_indices = mask.nonzero(as_tuple=True)[0].tolist()
 

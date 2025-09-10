@@ -1,5 +1,6 @@
 import logging
 from typing import Dict, Any, List, Optional
+from project.yuma_simulation._internal.yumas import _compute_consensus_thresholds
 
 import torch
 
@@ -146,6 +147,14 @@ def compare_bonds(
             "matches": False,
         }
 
+    # IMPORTANT: The simulator's bond matrices are column-normalized over the INCLUDED
+    # validators (after filtering). The real bonds were column-normalized over the FULL set
+    # of validators before filtering. After we drop rows, columns no longer sum to 1.
+    # Re-normalize real_bonds_filtered column-wise so comparison is apples-to-apples.
+    col_sums_filtered = real_bonds_filtered.sum(dim=0, keepdim=True)
+    col_sums_filtered = torch.where(col_sums_filtered > 1e-12, col_sums_filtered, torch.ones_like(col_sums_filtered))
+    real_bonds_filtered = real_bonds_filtered / col_sums_filtered
+
     bonds_diff = torch.abs(sim_bonds_epoch - real_bonds_filtered)
     bonds_max_diff = float(torch.max(bonds_diff).item())
     bonds_mean_diff = float(torch.mean(bonds_diff).item())
@@ -247,23 +256,45 @@ def compare_incentives(
     miners: List[str],
     tolerance: float,
     sim_epoch_idx: Optional[int] = None,
+    case=None,
+    yuma_config: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Compare simulation incentives with real incentives for a single epoch."""
     if real_incentives_epoch is None:
         return {"error": "No real incentives data available", "matches": False}
 
-    sim_vals: List[float] = []
+    # Always build simulator incentives from dictionary (tests the simulator output)
+    sim_vals_dict: List[float] = []
     for miner_hk in miners:
         if miner_hk in sim_incentives_per_epoch and sim_incentives_per_epoch[miner_hk]:
             seq = sim_incentives_per_epoch[miner_hk]
             if sim_epoch_idx is not None and 0 <= sim_epoch_idx < len(seq):
-                sim_vals.append(float(seq[sim_epoch_idx]))
+                sim_vals_dict.append(float(seq[sim_epoch_idx]))
             else:
-                sim_vals.append(float(seq[-1]))
+                sim_vals_dict.append(float(seq[-1]))
         else:
-            sim_vals.append(0.0)
+            sim_vals_dict.append(0.0)
+    sim_tensor = torch.tensor(sim_vals_dict, dtype=torch.float32)
 
-    sim_tensor = torch.tensor(sim_vals, dtype=torch.float32)
+    # Optional: recompute reference incentives (W,S,C) to detect mapping/index issues and report
+    recompute_diff_max: Optional[float] = None
+    try:
+        if case is not None and yuma_config is not None and sim_epoch_idx is not None:
+            W = case.weights_epochs[sim_epoch_idx]
+            S = case.stakes_epochs[sim_epoch_idx]
+            denom_W = W.sum(dim=1, keepdim=True)
+            denom_W = torch.where(denom_W > 0, denom_W, torch.ones_like(denom_W))
+            Wn = W / denom_W
+            Sn = S / S.sum().clamp(min=torch.finfo(S.dtype).eps)
+            C, _ = _compute_consensus_thresholds(Wn, Sn, yuma_config)
+            W_clipped = torch.min(Wn, C)
+            R = (Sn.view(-1, 1) * W_clipped).sum(dim=0)
+            sim_tensor_ref = (R / R.sum().clamp(min=torch.finfo(R.dtype).eps)).to(torch.float32)
+            # Compare dict vs recompute
+            if sim_tensor_ref.shape == sim_tensor.shape:
+                recompute_diff_max = float(torch.max(torch.abs(sim_tensor - sim_tensor_ref)).item())
+    except Exception:
+        pass
     if sim_tensor.shape != real_incentives_epoch.shape:
         return {
             "error": f"Shape mismatch: sim={tuple(sim_tensor.shape)}, real={tuple(real_incentives_epoch.shape)}",
@@ -271,10 +302,13 @@ def compare_incentives(
         }
 
     diff = torch.abs(sim_tensor - real_incentives_epoch)
-    return {
+    result = {
         "max_diff": float(torch.max(diff).item()),
         "mean_diff": float(torch.mean(diff).item()),
         "nonzero_diffs": int((diff > tolerance).sum().item()),
         "matches": bool(torch.max(diff).item() < tolerance),
         "shape": list(sim_tensor.shape),
     }
+    if recompute_diff_max is not None:
+        result["sim_vs_recompute_max_diff"] = recompute_diff_max
+    return result

@@ -517,6 +517,18 @@ def create_bond_evolution_report(
             if epoch_idx < len(case.valid_indices_epochs)
             else []
         )
+        # Precompute normalized bonds and filtered column sum over validators present this epoch
+        B_full = epoch_meta.get("bonds", torch.zeros(256, 256))
+        B_full_norm = B_full / 65535.0 if isinstance(B_full, torch.Tensor) else torch.zeros(256, 256)
+        valid_uids_epoch = (
+            case.valid_indices_epochs[epoch_idx]
+            if epoch_idx < len(case.valid_indices_epochs)
+            else []
+        )
+        filtered_col_sum = 0.0
+        if isinstance(B_full_norm, torch.Tensor) and valid_uids_epoch:
+            filtered_col_sum = B_full_norm[valid_uids_epoch, target_miner_uid].sum().item()
+
         epoch_data: Dict[str, Any] = {
             "epoch": epoch_idx,
             "block": epoch_meta.get("block", f"epoch_{epoch_idx}"),
@@ -557,10 +569,12 @@ def create_bond_evolution_report(
                 sim_bond = float(sim_bonds_epoch[row_idx, target_miner_uid].item())
             else:
                 sim_bond = 0.0
-            real_bond_raw = float(epoch_meta.get("bonds", torch.zeros(256, 256))[validator_uid, target_miner_uid].item())
+            real_bond_raw = float(B_full[validator_uid, target_miner_uid].item()) if isinstance(B_full, torch.Tensor) else 0.0
             real_bond_norm = real_bond_raw / 65535.0
-            col_sum = (epoch_meta.get("bonds", torch.zeros(256, 256))[:, target_miner_uid] / 65535.0).sum().item()
-            real_bond_norm = real_bond_norm / (col_sum + 1e-6) if col_sum > 1e-6 else 0.0
+            # Normalize over the filtered validator set to match simulator bonds
+            real_bond_norm = (
+                real_bond_norm / (filtered_col_sum + 1e-9) if filtered_col_sum > 1e-12 else 0.0
+            )
             if sim_bond > 0:
                 sim_bonds_to_target_sum += sim_bond
                 sim_bonds_to_target_nonzero += 1
@@ -712,12 +726,22 @@ def create_diagnostic_artifacts(
                             f"    Real (col sum): {focus_val['bonds']['real_col_sum']}\n\n"
                         )
                     f.write(f"All validators → UID {max_target_uid} (Union):\n")
+                    union_rows = []
                     for _, val_data in ep["validators"].items():
                         uid = val_data["validator_uid"]
-                        if uid != max_validator_uid:
-                            sim_bond = val_data["bonds"]["simulated"]
-                            real_bond = val_data["bonds"]["real_col_sum"]
-                            weight = val_data["weights"]["value"]
+                        if uid == max_validator_uid:
+                            continue
+                        sim_bond = float(val_data["bonds"]["simulated"])
+                        real_bond = float(val_data["bonds"]["real_col_sum"])
+                        weight = float(val_data["weights"]["value"])
+                        if (sim_bond > 0) or (real_bond > 0) or (weight > 0):
+                            score = max(sim_bond, real_bond, weight)
+                            union_rows.append((score, uid, sim_bond, real_bond, weight))
+                    if not union_rows:
+                        f.write("  (No non-zero entries)\n")
+                    else:
+                        union_rows.sort(key=lambda x: x[0], reverse=True)
+                        for _, uid, sim_bond, real_bond, weight in union_rows[:50]:
                             f.write(
                                 f"  UID {uid:3d}: sim={sim_bond:7.4f}, real={real_bond:7.4f}, weight={weight}\n"
                             )
@@ -758,13 +782,22 @@ def create_diagnostic_artifacts(
                     f.write(f"\nReal data non-zero bonds → UID {max_target_uid}:\n")
                     real_nonzero_data = []
                     if real_bonds_full is not None and max_target_uid < real_bonds_full.shape[1]:
+                        # Compute filtered column sum across validators present this epoch
+                        filtered_col_sum_local = 0.0
+                        if epoch_idx < len(case.valid_indices_epochs):
+                            valid_uids_local = case.valid_indices_epochs[epoch_idx]
+                            if valid_uids_local:
+                                B_full_norm_local = real_bonds_full / 65535.0
+                                filtered_col_sum_local = B_full_norm_local[valid_uids_local, max_target_uid].sum().item()
                         for validator_uid in range(real_bonds_full.shape[0]):
                             real_bond_raw = float(real_bonds_full[validator_uid, max_target_uid].item())
                             if real_bond_raw > 0:
-                                # Normalize real bond
+                                # Normalize real bond over filtered validator set for this epoch
                                 real_bond_norm = real_bond_raw / 65535.0
-                                col_sum = (real_bonds_full[:, max_target_uid] / 65535.0).sum().item()
-                                real_bond_norm = real_bond_norm / (col_sum + 1e-6) if col_sum > 1e-6 else 0.0
+                                if filtered_col_sum_local > 1e-12:
+                                    real_bond_norm = real_bond_norm / (filtered_col_sum_local + 1e-9)
+                                else:
+                                    real_bond_norm = 0.0
                                 weight = float(W_full[validator_uid, max_target_uid]) if (W_full is not None and validator_uid < W_full.shape[0] and max_target_uid < W_full.shape[1]) else 0.0
                                 real_nonzero_data.append((validator_uid, real_bond_norm, weight, real_bond_raw))
                     
@@ -815,6 +848,72 @@ def create_diagnostic_artifacts(
             case=case, target_miner_uid=divergent_miner_uid, netuid=netuid
         )
         diagnostics["weight_analysis_report"] = weight_report
+
+    # Consensus snapshot removed per request
+
+    # Add incentives snapshot: sim vs real for last compared epoch
+    try:
+        epoch = last_epoch_idx
+        miners_epoch: list[str] = []
+        if hasattr(case, 'miners_epochs') and len(getattr(case, 'miners_epochs', [])) > epoch:
+            miners_epoch = case.miners_epochs[epoch]
+        if not miners_epoch:
+            miner_uids = case.miner_indices_epochs[epoch] if len(case.miner_indices_epochs) > epoch else list(range(case.metas[epoch]["W"].shape[1]))
+            epoch_hotkeys = case.metas[epoch].get("hotkeys", [])
+            miners_epoch = [epoch_hotkeys[uid] if 0 <= uid < len(epoch_hotkeys) else f"UID{uid}" for uid in miner_uids]
+
+        # Real incentives as tensor
+        real_inc = case.incentives_epochs[epoch]
+        if real_inc is None:
+            raise RuntimeError("No real incentives tensor available for incentives snapshot")
+
+        # Recompute sim incentives directly from case W,S to avoid dict lookups
+        W_valid = case.weights_epochs[epoch]
+        S_valid = case.stakes_epochs[epoch]
+        from project.yuma_simulation._internal.yumas import _compute_consensus_thresholds
+        C_vec, _ = _compute_consensus_thresholds(W_valid, S_valid, yuma_config)
+        # Normalize rows of W, then clip, then compute normalized ranks
+        denom_W = W_valid.sum(dim=1, keepdim=True)
+        denom_W = torch.where(denom_W > 0, denom_W, torch.ones_like(denom_W))
+        W_norm = W_valid / denom_W
+        W_clipped = torch.min(W_norm, C_vec)
+        R = (S_valid.view(-1, 1) * W_clipped).sum(dim=0)
+        I_sim = R / R.sum().clamp(min=torch.finfo(R.dtype).eps)
+
+        # Align shapes: both should already match miners_epoch length
+        if I_sim.shape != real_inc.shape:
+            logger.debug(f"Incentives snapshot shape mismatch: sim={tuple(I_sim.shape)} real={tuple(real_inc.shape)}")
+
+        # Compose report with diffs
+        sim_list = [float(x) for x in I_sim.tolist()]
+        real_list = [float(x) for x in real_inc.tolist()]
+        diffs = [abs(s - r) for s, r in zip(sim_list, real_list)]
+        top = sorted([(d, idx) for idx, d in enumerate(diffs)], reverse=True)[:10]
+        top_diffs = [
+            {
+                "index": int(idx),
+                "miner_uid": int(case.miner_indices_epochs[epoch][idx]) if len(case.miner_indices_epochs) > epoch and idx < len(case.miner_indices_epochs[epoch]) else idx,
+                "miner_hotkey": miners_epoch[idx] if idx < len(miners_epoch) else f"IDX{idx}",
+                "sim": float(sim_list[idx]),
+                "real": float(real_list[idx]),
+                "diff": float(diffs[idx]),
+            }
+            for d, idx in top
+        ]
+
+        incentives_snapshot = {
+            "epoch": int(epoch),
+            "miners": miners_epoch,
+            "sim_incentives": sim_list,
+            "real_incentives": real_list,
+            "max_diff": float(max(diffs) if diffs else 0.0),
+            "mean_diff": float(sum(diffs) / len(diffs) if diffs else 0.0),
+            "top_differences": top_diffs,
+        }
+        with open(artifact_dir / "incentives_report.json", "w") as f:
+            json.dump(incentives_snapshot, f, indent=2)
+    except Exception as e:
+        logger.debug(f"Failed to create incentives snapshot: {e}")
 
     save_diagnostic_artifacts(artifact_dir, diagnostics, netuid)
     diagnostics["artifact_path"] = str(artifact_dir)
