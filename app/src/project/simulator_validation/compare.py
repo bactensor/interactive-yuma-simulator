@@ -1,6 +1,6 @@
 import logging
 from typing import Dict, Any, List, Optional
-from project.yuma_simulation._internal.yumas import _compute_consensus_thresholds
+from project.yuma_simulation._internal.yumas import _compute_consensus
 
 import torch
 
@@ -286,7 +286,7 @@ def compare_incentives(
             denom_W = torch.where(denom_W > 0, denom_W, torch.ones_like(denom_W))
             Wn = W / denom_W
             Sn = S / S.sum().clamp(min=torch.finfo(S.dtype).eps)
-            C, _ = _compute_consensus_thresholds(Wn, Sn, yuma_config)
+            C, _ = _compute_consensus(Wn, Sn, yuma_config)
             W_clipped = torch.min(Wn, C)
             R = (Sn.view(-1, 1) * W_clipped).sum(dim=0)
             sim_tensor_ref = (R / R.sum().clamp(min=torch.finfo(R.dtype).eps)).to(torch.float32)

@@ -118,6 +118,9 @@ def optimized_compute_consensus_weights(W: torch.Tensor, S: torch.Tensor, config
 
 
 def binary_search_compute_consensus_weights(W: torch.Tensor, S: torch.Tensor, config) -> torch.Tensor:
+    """
+    Binary search to find consensus weights. Legacy method for compatibility.
+    """
     C = torch.zeros(W.shape[1], dtype=W.dtype, device=W.device)
 
     for i, miner_weight in enumerate(W.T):
@@ -135,23 +138,11 @@ def binary_search_compute_consensus_weights(W: torch.Tensor, S: torch.Tensor, co
         C[i] = c_high
     return C
 
-
-CONSENSUS_IMPL_NAME = 'optimized'
-if os.environ.get('LEGACY_CONSENSUS') == '1':
-    compute_consensus_weights = binary_search_compute_consensus_weights
-    CONSENSUS_IMPL_NAME = 'binary_search'
-else:
-    compute_consensus_weights = optimized_compute_consensus_weights
-    CONSENSUS_IMPL_NAME = 'optimized'
-
 def rust_parity_compute_consensus_weights(W: torch.Tensor, S: torch.Tensor, config) -> torch.Tensor:
     """
     Rust-parity consensus via stake-weighted median with majority (kappa).
 
     Faithful port of weighted_median_col_sparse from pallets/subtensor/src/epoch/math.rs
-    using mid-pivot partition acceptance:
-      accept if (part_lo + lo_stake) <= minority and minority < (part_hi - hi_stake),
-      where lo/hi exclude equals to pivot. Otherwise recurse into lower/upper.
     """
     V, Scols = W.shape
     device = W.device
@@ -204,27 +195,23 @@ def rust_parity_compute_consensus_weights(W: torch.Tensor, S: torch.Tensor, conf
         Cs.append(wm(W_use[:, j], S_use))
     return torch.stack(Cs)
 
-# Optional: allow enabling Rust-parity consensus via env var
-if os.environ.get('RUST_PARITY_CONSENSUS') == '1':
-    compute_consensus_weights = rust_parity_compute_consensus_weights
-    CONSENSUS_IMPL_NAME = 'rust_parity'
-    logger.info("Using Rust-parity consensus (weighted median with majority kappa)")
+# Simple consensus configuration
+CONSENSUS_MODE = os.environ.get('CONSENSUS_MODE', 'rust_parity')  # legacy, optimized, rust_parity
+QUANTIZATION_ENABLED = os.environ.get('QUANTIZATION_ENABLED', '0') == '1'
 
+# Select consensus function
+if CONSENSUS_MODE == 'legacy':
+    compute_consensus_weights = binary_search_compute_consensus_weights
+elif CONSENSUS_MODE == 'optimized':
+    compute_consensus_weights = optimized_compute_consensus_weights
+else:  # default to rust_parity
+    compute_consensus_weights = rust_parity_compute_consensus_weights
 
 def _quantize_consensus(C: torch.Tensor) -> torch.Tensor:
-    """Optionally quantize consensus thresholds to 16-bit grid.
-
-    Default (chain-like): no quantization.
-    - RUST_PARITY_QUANTIZE=1: floor(C*65535)/65535
-    - NO_CONSENSUS_QUANTIZE=1: no quantization
-    """
+    """Optionally quantize consensus thresholds to 16-bit grid."""
     if not (torch.isfinite(C).all() and C.numel() > 0):
         return C
-    if os.environ.get('NO_CONSENSUS_QUANTIZE') == '1':
-        return C
-    if os.environ.get('RUST_PARITY_QUANTIZE') != '1':
-        return C
-    # FLOOR mode
+    # Floor to 16-bit grid
     scaled = C.clamp(min=0.0, max=1.0) * 65_535
     Cq = torch.floor(scaled) / 65_535
     zeroed = ((C > 0) & (Cq == 0)).sum().item()
@@ -233,29 +220,15 @@ def _quantize_consensus(C: torch.Tensor) -> torch.Tensor:
     return Cq
 
 
-
-def _compute_consensus_thresholds(
+def _compute_consensus(
     W: torch.Tensor, S: torch.Tensor, config: YumaConfig
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Unified consensus computation with optional pre-W quantize and optional C quantize.
-
-    - Applies QUANTIZE_W_FOR_CONSENSUS=1 (floor W to u16 grid) if set.
-    - Computes C using the active compute_consensus_weights implementation.
-    - Applies C quantization only if explicitly requested via flags.
-    - Emits debug diagnostics when DEBUG_CONSENSUS=1.
-    """
-    # Optional: pre-consensus weight flooring to u16 grid
-    try:
-        if os.environ.get('QUANTIZE_W_FOR_CONSENSUS') == '1':
-            W_for_C = torch.floor(W.clamp(min=0.0, max=1.0) * 65_535) / 65_535
-        else:
-            W_for_C = W
-    except Exception:
-        W_for_C = W
-    C = compute_consensus_weights(W_for_C, S, config)
+    """Unified consensus computation with optional quantization."""
+    # Compute consensus using selected method
+    C = compute_consensus_weights(W, S, config)
     C_pre = C.clone()
-    # Optional C quantization (default: off, chain-like)
-    C = _quantize_consensus(C)
+    if QUANTIZATION_ENABLED:
+        C = _quantize_consensus(C)
     return C, C_pre
 
 def compute_incentive(R: torch.Tensor, config: YumaConfig):
@@ -306,7 +279,7 @@ def YumaSubtensorOld(
     P = (S.view(-1, 1) * W).sum(dim=0)
 
     # === Consensus === (unified helper, chain-like by default)
-    C, _ = _compute_consensus_thresholds(W, S, config)
+    C, _ = _compute_consensus(W, S, config)
 
     # === Consensus clipped weight ===
     W_clipped = torch.min(W, C)
@@ -412,7 +385,7 @@ def YumaSubtensor(
     P = (S.view(-1, 1) * W).sum(dim=0)
 
     # === Consensus === (unified helper, chain-like by default)
-    C, _ = _compute_consensus_thresholds(W, S, config)
+    C, _ = _compute_consensus(W, S, config)
 
     # === Consensus clipped weight ===
     W_clipped = torch.min(W, C)
@@ -521,7 +494,7 @@ def Yuma(
     P = (S.view(-1, 1) * W).sum(dim=0)
 
     # === Consensus === (unified helper, chain-like by default)
-    C, _ = _compute_consensus_thresholds(W, S, config)
+    C, _ = _compute_consensus(W, S, config)
 
     # === Consensus clipped weight ===
     W_clipped = torch.min(W, C)
@@ -631,7 +604,7 @@ def Yuma2b(
     P = (S.view(-1, 1) * W).sum(dim=0)
 
     # === Consensus === (unified helper, chain-like by default)
-    C, _ = _compute_consensus_thresholds(W, S, config)
+    C, _ = _compute_consensus(W, S, config)
 
     # === Consensus clipped weight ===
     W_clipped = torch.min(W_prev, C)
@@ -748,7 +721,7 @@ def Yuma2c(
     P = (S.view(-1, 1) * W).sum(dim=0)
 
     # === Consensus === (unified helper, chain-like by default)
-    C, _ = _compute_consensus_thresholds(W, S, config)
+    C, _ = _compute_consensus(W, S, config)
 
     # === Consensus clipped weight ===
     W_clipped = torch.min(W, C)
@@ -863,7 +836,7 @@ def Yuma3(
     P = (S.view(-1, 1) * W).sum(dim=0)
 
     # === Consensus === (unified helper, chain-like by default)
-    C, _ = _compute_consensus_thresholds(W, S, config)
+    C, _ = _compute_consensus(W, S, config)
 
     # === Consensus clipped weight ===
     W_clipped = torch.min(W, C)

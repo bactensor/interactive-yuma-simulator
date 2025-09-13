@@ -870,8 +870,8 @@ def create_diagnostic_artifacts(
         # Recompute sim incentives directly from case W,S to avoid dict lookups
         W_valid = case.weights_epochs[epoch]
         S_valid = case.stakes_epochs[epoch]
-        from project.yuma_simulation._internal.yumas import _compute_consensus_thresholds
-        C_vec, _ = _compute_consensus_thresholds(W_valid, S_valid, yuma_config)
+        from project.yuma_simulation._internal.yumas import _compute_consensus
+        C_vec, _ = _compute_consensus(W_valid, S_valid, yuma_config)
         # Normalize rows of W, then clip, then compute normalized ranks
         denom_W = W_valid.sum(dim=1, keepdim=True)
         denom_W = torch.where(denom_W > 0, denom_W, torch.ones_like(denom_W))
