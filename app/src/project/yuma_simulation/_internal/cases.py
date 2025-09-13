@@ -246,28 +246,6 @@ class MetagraphCase(BaseCase):
                 run_block_diagnostics(block, mg_data["netuid"], S, W, hk)
 
             meta_dict = {"S": S, "W": W, "hotkeys": hk}
-            # Optional: include block_at_registration (BAR) if provided by backend
-            try:
-                bar_map = mg_data.get("block_at_registration") or mg_data.get("bar")
-                if bar_map:
-                    bar_key = None
-                    # Support both string and integer block keys
-                    if isinstance(bar_map, dict):
-                        if str(block) in bar_map:
-                            bar_key = str(block)
-                        elif block in bar_map:  # type: ignore[operator]
-                            bar_key = block  # type: ignore[assignment]
-                    if bar_key is not None:
-                        bar_vals = bar_map[bar_key]  # type: ignore[index]
-                        # Expect list or dict of uid->block; convert to list aligned to n_slots
-                        if isinstance(bar_vals, dict):
-                            # Accept int or str UID keys
-                            bar_list = [int(bar_vals.get(uid, bar_vals.get(str(uid), 0))) for uid in range(n_slots)]
-                        else:
-                            bar_list = [int(v) for v in bar_vals]
-                        meta_dict["block_at_registration"] = bar_list
-            except Exception:
-                pass
             
             # Add bonds, dividends, and incentives for all epochs where data is available
             block_str = str(block)

@@ -111,6 +111,117 @@ def _debug_log_bond(
         logger.debug(f"[BOND] Error tracking V{validator_uid}->M{miner_uid} at epoch {epoch}: {e}")
 
 
+def _detect_hotkey_swaps(
+    epoch: int,
+    hotkeys_epochs: list[list[str]],
+    current_miner_indices: list[int]
+) -> set[int]:
+    """
+    Detect UIDs where hotkeys have changed between epochs.
+    
+    Args:
+        epoch: Current epoch number
+        hotkeys_epochs: List of hotkeys for each epoch
+        current_miner_indices: List of miner UIDs for current epoch
+        
+    Returns:
+        Set of UIDs where hotkey swaps were detected
+    """
+    new_changed_uids: set[int] = set()
+    
+    if epoch <= 0:
+        return new_changed_uids
+        
+    try:
+        prev_hotkeys = hotkeys_epochs[epoch - 1]
+        curr_hotkeys = hotkeys_epochs[epoch]
+    except Exception:
+        return new_changed_uids
+    
+    max_uids = min(len(prev_hotkeys), len(curr_hotkeys))
+    for uid in range(max_uids):
+        prev_hk = prev_hotkeys[uid]
+        curr_hk = curr_hotkeys[uid]
+        if prev_hk != curr_hk and uid in current_miner_indices:
+            new_changed_uids.add(uid)
+            
+    if new_changed_uids:
+        logger.debug(
+            f"[BOND] Epoch {epoch}: hotkey swap UIDs -> {sorted(new_changed_uids)}"
+        )
+    
+    return new_changed_uids
+
+
+def _apply_commit_reveal_masking(
+    B_state: torch.Tensor | None,
+    mask_uids: set[int],
+    current_miner_indices: list[int],
+    epoch: int,
+    phase: str = "pre-yuma"
+) -> list[int]:
+    """
+    Apply bond masking for commit-reveal period.
+    
+    Args:
+        B_state: Current bond state tensor
+        mask_uids: Set of UIDs to mask
+        current_miner_indices: List of miner UIDs for current epoch
+        epoch: Current epoch number
+        phase: Phase of masking (pre-yuma or post-yuma)
+        
+    Returns:
+        List of column indices that were masked
+    """
+    if not mask_uids:
+        return []
+        
+    uid_to_col = {uid: idx for idx, uid in enumerate(current_miner_indices)}
+    changed_cols = [uid_to_col[uid] for uid in mask_uids if uid in uid_to_col]
+    changed_cols.sort()
+    
+    if B_state is not None and changed_cols:
+        B_state[:, changed_cols] = 0.0
+        if BOND_DEBUG_ENABLED:
+            phase_label = "Pre-Yuma" if phase == "pre-yuma" else "Post-Yuma"
+            logger.info(
+                f"[BOND] Epoch {epoch} - {phase_label} zeroing columns (CRI/masked): {changed_cols}"
+            )
+    
+    return changed_cols
+
+
+def _update_cooldown_tracking(
+    cooldown_epochs_by_uid: dict[int, int],
+    new_changed_uids: set[int],
+    commit_reveal_epochs: int
+) -> None:
+    """
+    Update cooldown tracking for commit-reveal period.
+    
+    Args:
+        cooldown_epochs_by_uid: Dict tracking remaining cooldown epochs per UID
+        new_changed_uids: Set of UIDs with newly detected changes
+        commit_reveal_epochs: Commit-reveal period in epochs
+    """
+    if commit_reveal_epochs <= 0:
+        return
+        
+    # Decrement existing cooldowns
+    for uid in list(cooldown_epochs_by_uid.keys()):
+        if cooldown_epochs_by_uid[uid] > 0:
+            cooldown_epochs_by_uid[uid] -= 1
+        if cooldown_epochs_by_uid[uid] <= 0:
+            cooldown_epochs_by_uid.pop(uid, None)
+            
+    # Start cooldown for hotkey swaps
+    for uid in new_changed_uids:
+        cooldown_epochs_by_uid[uid] = max(
+            cooldown_epochs_by_uid.get(uid, 0),
+            max(0, commit_reveal_epochs - 2),
+        )
+
+
 def _run_simulation(
     case: BaseCase,
     yuma_version: str,
@@ -232,9 +343,9 @@ def _run_dynamic_simulation(
 
     yuma_config = yuma_config.with_overrides(case.get_config_overrides())
 
-    # Bonds reset window with commit–reveal: emulate on-chain masking for newly registered /
-    # hotkey-swapped miners. We mask bonds for a total of (CRI - 1) epochs: the current epoch
-    # when the change is observed plus (CRI - 2) subsequent epochs.
+    # Bonds reset window with commit–reveal: emulate on-chain masking for hotkey-swapped miners.
+    # We mask bonds for a total of (CRI - 1) epochs: the current epoch when the change is 
+    # observed plus (CRI - 2) subsequent epochs.
     commit_reveal_epochs = int(getattr(case, "commit_reveal_period_epochs", 0) or 0)
     # Track cooldown remaining epochs per UID.
     cooldown_epochs_by_uid: dict[int, int] = {}
@@ -291,116 +402,35 @@ def _run_dynamic_simulation(
                 extra_info=f"New shape: {B_state.shape}"
             )
 
-        # Track miner UIDs/columns whose bonds must be force-zeroed due to registration/hotkey change
-        # and commit–reveal cooldown. We'll compute columns after collecting UIDs.
-        changed_cols: list[int] = []
-        new_changed_uids: set[int] = set()
-        real_zero_uids: set[int] = set()
-
-        # Apply "recently registered" mask using block_at_registration if available; else fallback to hotkey swap
-        if epoch > 0:
-            to_zero_cols: list[int] = []
-            meta = case.metas[epoch]
-            bar_list = meta.get("block_at_registration") if isinstance(meta, dict) else None
-            last_tempo_block = None
-            try:
-                if hasattr(case, "blocks") and len(case.blocks) > epoch - 1:
-                    last_tempo_block = int(case.blocks[epoch - 1])
-            except Exception:
-                last_tempo_block = None
-
-            if bar_list and last_tempo_block is not None:
-                for uid in current_miner_indices:
-                    try:
-                        reg_block = int(bar_list[uid])
-                        if reg_block >= last_tempo_block:
-                            new_changed_uids.add(uid)
-                    except Exception:
-                        continue
-                if new_changed_uids:
-                    logger.debug(
-                        f"[BOND] Epoch {epoch}: recently registered UIDs (last_tempo={last_tempo_block}) -> {sorted(new_changed_uids)}"
-                    )
-            else:
-                # Fallback: Detect hotkey swaps at the same UID
-                try:
-                    prev_hotkeys = hotkeys_epochs[epoch - 1]
-                    curr_hotkeys = hotkeys_epochs[epoch]
-                except Exception:
-                    prev_hotkeys, curr_hotkeys = [], []
-
-                max_uids = min(len(prev_hotkeys), len(curr_hotkeys))
-                for uid in range(max_uids):
-                    prev_hk = prev_hotkeys[uid]
-                    curr_hk = curr_hotkeys[uid]
-                    if prev_hk != curr_hk and uid in current_miner_indices:
-                        new_changed_uids.add(uid)
-                if new_changed_uids:
-                    logger.debug(
-                        f"[BOND] Epoch {epoch}: identity swap fallback UIDs -> {sorted(new_changed_uids)}"
-                    )
-
-        # Align to real on-chain resets if real bonds are provided for this epoch
-        try:
-            if B_state is not None and hasattr(case, 'bonds_epochs'):
-                b_real = case.bonds_epochs[epoch]
-                if b_real is not None and b_real.shape[1] == len(current_miner_indices):
-                    zero_cols = []
-                    col_sums = b_real.sum(dim=0)
-                    for j in range(b_real.shape[1]):
-                        if float(col_sums[j].item()) <= 1e-12:
-                            zero_cols.append(j)
-                    if zero_cols:
-                        # Convert zero_cols to UIDs
-                        for j in zero_cols:
-                            if 0 <= j < len(current_miner_indices):
-                                real_zero_uids.add(current_miner_indices[j])
-                        logger.debug(
-                            f"[BOND] Epoch {epoch}: matched real zeroed columns {zero_cols} (on-chain reset)"
-                        )
-        except Exception:
-            pass
-
-        # Build final mask set considering commit–reveal cooldown and newly changed uids
+        # Detect hotkey swaps for commit-reveal masking
+        new_changed_uids = _detect_hotkey_swaps(
+            epoch=epoch,
+            hotkeys_epochs=hotkeys_epochs,
+            current_miner_indices=current_miner_indices
+        )
+        
+        # Build mask set from cooldowns and new changes
         mask_uids: set[int] = set()
-        # Existing cooldowns
         for uid, remain in cooldown_epochs_by_uid.items():
-            if remain and remain > 0:
+            if remain > 0:
                 mask_uids.add(uid)
-        # Newly changed uids this epoch
         mask_uids.update(new_changed_uids)
-        # Real zeroed columns imply masking too
-        mask_uids.update(real_zero_uids)
-
-        # Map masked UIDs to current epoch columns
-        if mask_uids:
-            uid_to_col = {uid: idx for idx, uid in enumerate(current_miner_indices)}
-            changed_cols = [uid_to_col[uid] for uid in mask_uids if uid in uid_to_col]
-            changed_cols.sort()
-            if B_state is not None and changed_cols:
-                B_state[:, changed_cols] = 0.0
-                if BOND_DEBUG_ENABLED:
-                    logger.info(
-                        f"[BOND] Epoch {epoch} - Pre-Yuma zeroing columns (CRI/masked): {changed_cols}"
-                    )
-
-        # Update cooldowns for next epochs
-        if commit_reveal_epochs > 0:
-            # Decrement existing cooldowns
-            for uid in list(cooldown_epochs_by_uid.keys()):
-                if cooldown_epochs_by_uid[uid] > 0:
-                    cooldown_epochs_by_uid[uid] -= 1
-                if cooldown_epochs_by_uid[uid] <= 0:
-                    # Clean up to keep dict small
-                    cooldown_epochs_by_uid.pop(uid, None)
-            # Start cooldown for new identity changes only (BAR/hotkey swap). Do not
-            # start cooldowns from real_zero_uids to avoid overshooting when chain
-            # resumes non-zero columns earlier than CRI.
-            for uid in new_changed_uids:
-                cooldown_epochs_by_uid[uid] = max(
-                    cooldown_epochs_by_uid.get(uid, 0),
-                    max(0, commit_reveal_epochs - 2),
-                )
+        
+        # Apply commit-reveal bond masking before simulation
+        changed_cols = _apply_commit_reveal_masking(
+            B_state=B_state,
+            mask_uids=mask_uids,
+            current_miner_indices=current_miner_indices,
+            epoch=epoch,
+            phase="pre-yuma"
+        )
+        
+        # Update cooldown tracking
+        _update_cooldown_tracking(
+            cooldown_epochs_by_uid=cooldown_epochs_by_uid,
+            new_changed_uids=new_changed_uids,
+            commit_reveal_epochs=commit_reveal_epochs
+        )
 
         should_align_consensus_state = (
             C_state is not None
@@ -471,16 +501,18 @@ def _run_dynamic_simulation(
             weights=W
         )
 
-        # Enforce on-chain behavior: when a miner hotkey changes at the same UID (or a fresh
-        # registration appears at a UID), bonds for that UID are reset to 0 across validators
-        # in the resulting state for this epoch.
-        if B_state is not None and changed_cols:
-            # Log which UIDs are being reset
-            if changed_cols and BOND_DEBUG_ENABLED:
-                reset_uids = [current_miner_indices[j] for j in changed_cols if j < len(current_miner_indices)]
-                logger.info(f"[BOND] Epoch {epoch} - Resetting bonds for miner UIDs: {reset_uids}")
-            
-            B_state[:, changed_cols] = 0.0
+        # Enforce on-chain behavior: Apply same commit-reveal masking after simulation
+        # to ensure bonds remain masked for the full commit-reveal period.
+        # We need to reapply the same mask_uids (not just new changes) to match chain behavior.
+        if B_state is not None and mask_uids:
+            # Reapply the same masking after simulation
+            post_sim_changed_cols = _apply_commit_reveal_masking(
+                B_state=B_state,
+                mask_uids=mask_uids,
+                current_miner_indices=current_miner_indices,
+                epoch=epoch,
+                phase="post-yuma"
+            )
             
             # Log after reset
             _debug_log_bond(
@@ -490,11 +522,17 @@ def _run_dynamic_simulation(
                 case=case,
                 validators=current_validators,
                 miner_indices=current_miner_indices,
-                extra_info=f"Reset columns: {changed_cols}"
+                extra_info=f"Reset columns (post-sim): {post_sim_changed_cols}"
             )
+        
         # Also prevent consensus carry-over on identity change to avoid influencing next epoch.
-        if C_state is not None and changed_cols:
-            C_state[changed_cols] = 0.0        
+        # Only reset consensus for newly changed UIDs, not the entire cooldown period
+        if C_state is not None and new_changed_uids:
+            new_changed_cols = []
+            uid_to_col = {uid: idx for idx, uid in enumerate(current_miner_indices)}
+            new_changed_cols = [uid_to_col[uid] for uid in new_changed_uids if uid in uid_to_col]
+            if new_changed_cols:
+                C_state[new_changed_cols] = 0.0        
 
         D_normalized: torch.Tensor = simulation_results["validator_reward_normalized"]
         
