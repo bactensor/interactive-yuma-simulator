@@ -10,7 +10,9 @@ from .experiment_setup import ExperimentSetup
 from typing import Optional
 from typing import Dict, List, Set, Tuple
 
-HotkeyTuple = Tuple[str, bool, bool]
+# Some backends may append a fourth element (e.g., block_at_registration) to the hotkey tuple.
+# Keep the type flexible to allow 3- or 4-tuples.
+HotkeyTuple = Tuple[str, bool, bool]  # possibly extended to 4 items at runtime
 
 logger = logging.getLogger(__name__)
 
@@ -244,7 +246,13 @@ def pick_validators(
 
     for blk_int, slot_list in hotkeys_by_blk.items():
         for uid, slot in enumerate(slot_list):
-            hk, is_val, is_active = slot
+            # Support both 3- and 4-tuples: (hk, is_val, is_active[, bar])
+            try:
+                hk = slot[0]
+                is_val = bool(slot[1]) if len(slot) > 1 else False
+                is_active = bool(slot[2]) if len(slot) > 2 else False
+            except Exception:
+                continue
             if not (hk and is_val and is_active):
                 continue
 

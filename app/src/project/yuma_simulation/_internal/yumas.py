@@ -401,7 +401,9 @@ def YumaSubtensor(
         C_old = C_old.to(torch.float64)
 
     # === Weight ===
-    W = (W.T / (W.sum(dim=1) + 1e-6)).T
+    denom_W = W.sum(dim=1, keepdim=True)
+    denom_W = torch.where(denom_W > 0, denom_W, torch.ones_like(denom_W))
+    W = W / denom_W
 
     # === Stake ===
     S = S / S.sum()
@@ -429,10 +431,11 @@ def YumaSubtensor(
     W_b = (1 - config.bond_penalty) * W + config.bond_penalty * W_clipped
     B = S.view(-1, 1) * W_b
     B_sum = B.sum(dim=0)
-    B = B / (B_sum + 1e-9)
-    B = torch.nan_to_num(B)
+    B_sum = torch.where(B_sum > 0, B_sum, torch.ones_like(B_sum))
+    B = B / B_sum
+    B = torch.nan_to_num(B, nan=0.0, posinf=0.0, neginf=0.0)
 
-    a = b = torch.tensor(float("nan"))
+    a = b = torch.tensor(float("nan"), dtype=W.dtype, device=W.device)
     alpha = 1 - config.bond_moving_avg
     if config.liquid_alpha and (C_old is not None):
         from .simulation_utils import _compute_liquid_alpha
@@ -460,7 +463,8 @@ def YumaSubtensor(
 
     # === Dividend Calculation===
     D = (B_ema * I).sum(dim=1)
-    D_normalized = D / (D.sum() + 1e-6)
+    D_normalized = D / D.sum().clamp(min=torch.finfo(D.dtype).eps)
+
 
     return {
         "weight": W,

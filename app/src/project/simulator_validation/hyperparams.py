@@ -63,6 +63,26 @@ def normalize_hyperparameters(raw_params: Dict[str, Any]) -> Dict[str, Any]:
         bond_penalty = 1.0
     normalized["bond_penalty"] = bond_penalty
 
+    # Optional: commit–reveal controls (names vary by source)
+    try:
+        cr_enabled = raw_params.get("commit_reveal_weights_enabled")
+        if cr_enabled is None:
+            cr_enabled = raw_params.get("commit_reveal_enabled")
+        normalized["commit_reveal_enabled"] = bool(cr_enabled) if cr_enabled is not None else False
+    except Exception:
+        normalized["commit_reveal_enabled"] = False
+
+    try:
+        # Try common keys for the period (epochs)
+        period = (
+            raw_params.get("reveal_period_epochs")
+            or raw_params.get("commit_reveal_period")
+            or raw_params.get("commit_reveal_interval")
+        )
+        normalized["commit_reveal_period_epochs"] = int(period) if period is not None else 0
+    except Exception:
+        normalized["commit_reveal_period_epochs"] = 0
+
     return normalized
 
 
@@ -155,7 +175,7 @@ def setup_yuma_configuration(
     netuid: int,
     bond_penalty_override: Optional[float] = None,
     hyperparams_data: Optional[Dict[str, Any]] = None,
-) -> Tuple[YumaConfig, bool]:
+) -> Tuple[YumaConfig, bool, Dict[str, Any]]:
     """
     Fetch subnet hyperparams and build YumaConfig; returns (config, is_yuma3_on).
     Raises ValueError when hyperparams are missing or invalid.
@@ -199,7 +219,11 @@ def setup_yuma_configuration(
                 alpha_sigmoid_steepness=params["alpha_sigmoid_steepness"],
             ),
         )
-        return yuma_config, is_yuma3_on
+        cr_info = {
+            "commit_reveal_enabled": params.get("commit_reveal_enabled", False),
+            "commit_reveal_period_epochs": params.get("commit_reveal_period_epochs", 0),
+        }
+        return yuma_config, is_yuma3_on, cr_info
     except KeyError as e:
         logger.error(f"Hyperparameter validation failed: {e}")
         raise ValueError(f"Cannot proceed with validation: {e}")

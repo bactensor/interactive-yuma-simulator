@@ -41,30 +41,34 @@ def validate_simulator(
         end_block=end_block,
         num_epochs=num_epochs,
     )
-    yuma_config, is_yuma3_on = setup_yuma_configuration(
+    yuma_config, is_yuma3_on, cr_info = setup_yuma_configuration(
         netuid, bond_penalty_override, hyperparams_data=hyperparams_data
     )
-
-    # Debug: print dumper stakes for epoch 0 and 1 (full vectors from metas)
-    try:
-        if len(case.metas) >= 1 and isinstance(case.metas[0].get("S", None), torch.Tensor):
-            S0 = case.metas[0]["S"]
-            logger.info(
-                "[DUMPER] Stakes epoch 0: shape=%s sum=%.6f\n%s",
-                tuple(S0.shape), float(S0.sum().item()), S0.tolist(),
-            )
-        if len(case.metas) >= 2 and isinstance(case.metas[1].get("S", None), torch.Tensor):
-            S1 = case.metas[1]["S"]
-            logger.info(
-                "[DUMPER] Stakes epoch 1: shape=%s sum=%.6f\n%s",
-                tuple(S1.shape), float(S1.sum().item()), S1.tolist(),
-            )
-    except Exception as e:
-        logger.warning(f"Failed to log dumper stakes for epochs 0/1: {e}")
 
     yuma_simulation_name = YumaSimulationNames().YUMA3 if is_yuma3_on else YumaSimulationNames().YUMA2
     yuma_version = "YUMA3" if is_yuma3_on else "YUMA2"
     logger.info(f"Running {yuma_version} simulation...")
+    # Propagate commit–reveal period to the case so bond masking can reflect chain semantics
+    # Only apply if commit_reveal_enabled is true
+    try:
+        commit_reveal_enabled = cr_info.get("commit_reveal_enabled", False)
+        commit_reveal_period = int(cr_info.get("commit_reveal_period_epochs", 0))
+        
+        # Only use the period if commit-reveal is actually enabled
+        if commit_reveal_enabled and commit_reveal_period > 0:
+            case.commit_reveal_period_epochs = commit_reveal_period
+            logger.info(
+                f"Commit–reveal enabled with period (epochs): {case.commit_reveal_period_epochs}"
+            )
+        else:
+            case.commit_reveal_period_epochs = 0
+            if not commit_reveal_enabled and commit_reveal_period > 0:
+                logger.info(
+                    f"Commit–reveal disabled, ignoring period of {commit_reveal_period} epochs"
+                )
+    except Exception:
+        pass
+
     _, _, sim_bonds, sim_incentives_per_epoch, sim_normalized_dividends = _run_dynamic_simulation(
         case=case, yuma_version=yuma_simulation_name, yuma_config=yuma_config
     )
