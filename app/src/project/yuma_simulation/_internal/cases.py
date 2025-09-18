@@ -111,6 +111,7 @@ class MetagraphCase(BaseCase):
     # Commit–reveal period in epochs for masking bonds on reset entities.
     # 0 means disabled.
     commit_reveal_period_epochs: int = 0
+    bonds_reset_enabled: bool = False
 
     name: str = "Dynamic Metagraph Case"
     metas: list[dict] = field(default_factory=list)  # List of metagraph dicts: { "S": ..., "W": ..., "hotkeys": ... }
@@ -241,11 +242,22 @@ class MetagraphCase(BaseCase):
 
             hk = [t[0] for t in slot_view if t]
 
+            # Extract timing data for temporal weight masking
+            # Format: (hotkey, is_validator, is_active, uid, last_update, block_at_registration_id)
+            last_updates = [tpl[4] for tpl in slot_view]
+            blocks_at_registration = [tpl[5] for tpl in slot_view]
+
             # comparing the fetched dumper data with on-chain data for testing purposes
             if diagnostics_enabled and block in diag_blocks:
                 run_block_diagnostics(block, mg_data["netuid"], S, W, hk)
 
-            meta_dict = {"S": S, "W": W, "hotkeys": hk}
+            meta_dict = {
+                "S": S,
+                "W": W,
+                "hotkeys": hk,
+                "last_updates": last_updates,
+                "blocks_at_registration": blocks_at_registration
+            }
             
             # Add bonds, dividends, and incentives for all epochs where data is available
             block_str = str(block)
@@ -350,30 +362,37 @@ class MetagraphCase(BaseCase):
         return df_stakes
 
     @property
-    def bonds_epochs(self) -> list[Optional[torch.Tensor]]:
-        """
-        Return a list of bonds matrices (one per epoch) that have been filtered according
-        to that epoch's valid (validators) and miner indices. Only available for first two epochs.
-        Returns None for epochs without bonds data.
-        """
-        bonds = []
+    def bonds_epochs_raw(self) -> list[Optional[torch.Tensor]]:
+        """Return filtered bond matrices in the same scale as on-chain storage."""
+        bonds: list[Optional[torch.Tensor]] = []
         for i, meta in enumerate(self.metas):
-            if "bonds" in meta:
-                B_full = meta["bonds"]
-                valid_indices = self.valid_indices_epochs[i]
-                miner_indices = self.miner_indices_epochs[i]
-                # Filter rows (validators) and columns (miners)
-                B_valid = B_full[valid_indices, :][:, miner_indices]
-                # Normalize from 16-bit fixed point to [0,1]
-                B_valid = B_valid / 65535.0
-                # Column-normalize over the filtered validator set to sum to 1
-                col_sums = B_valid.sum(dim=0)
-                B_valid = B_valid / (col_sums + 1e-9)  # Use moderately smaller epsilon
-                B_valid = torch.nan_to_num(B_valid)
-                bonds.append(B_valid)
-            else:
+            if "bonds" not in meta:
                 bonds.append(None)
+                continue
+
+            B_full = meta["bonds"]
+            valid_indices = self.valid_indices_epochs[i]
+            miner_indices = self.miner_indices_epochs[i]
+            B_valid = B_full[valid_indices, :][:, miner_indices].clone()
+            bonds.append(B_valid.to(torch.float64))
         return bonds
+
+    @property
+    def bonds_epochs(self) -> list[Optional[torch.Tensor]]:
+        """Return column-normalized bond matrices for analysis/comparison."""
+        normalized: list[Optional[torch.Tensor]] = []
+        for raw in self.bonds_epochs_raw:
+            if raw is None:
+                normalized.append(None)
+                continue
+            col_sums = raw.sum(dim=0, keepdim=True)
+            norm = torch.where(
+                col_sums > 0,
+                raw / col_sums,
+                torch.zeros_like(raw),
+            )
+            normalized.append(torch.nan_to_num(norm))
+        return normalized
 
     @property
     def dividends_epochs(self) -> list[Optional[torch.Tensor]]:

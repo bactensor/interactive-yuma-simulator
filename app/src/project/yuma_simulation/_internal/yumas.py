@@ -198,6 +198,7 @@ def rust_parity_compute_consensus_weights(W: torch.Tensor, S: torch.Tensor, conf
 # Simple consensus configuration
 CONSENSUS_MODE = os.environ.get('CONSENSUS_MODE', 'rust_parity')  # legacy, optimized, rust_parity
 QUANTIZATION_ENABLED = os.environ.get('QUANTIZATION_ENABLED', '0') == '1'
+U16_MAX_FLOAT = 65_535.0
 
 # Select consensus function
 if CONSENSUS_MODE == 'legacy':
@@ -326,9 +327,24 @@ def YumaSubtensorOld(
     B_ema_sum = B_ema.sum(dim=0)
     B_ema = B_ema / (B_ema_sum + 1e-9)
     B_ema = torch.nan_to_num(B_ema)
+    B_ema_normalized = B_ema.clone()
+
+    # Mimic pallet storage quantization: column max-upscale then u16 floor.
+    col_max = B_ema_normalized.max(dim=0, keepdim=True).values
+    scale = torch.where(col_max > 0, 1.0 / col_max, torch.zeros_like(col_max))
+    B_upscaled = torch.nan_to_num(B_ema_normalized * scale)
+    B_storage = torch.floor(B_upscaled.clamp(min=0.0, max=1.0) * U16_MAX_FLOAT + 1e-9)
+
+    # When bonds are read next epoch they are column-normalized again.
+    B_storage_sum = B_storage.sum(dim=0, keepdim=True)
+    B_storage_norm = torch.where(
+        B_storage_sum > 0,
+        B_storage / B_storage_sum,
+        torch.zeros_like(B_storage),
+    )
 
     # === Dividend Calculation===
-    D = (B_ema * I).sum(dim=1)
+    D = (B_ema_normalized * I).sum(dim=1)
     D_normalized = D / D.sum().clamp(min=torch.finfo(D.dtype).eps)
 
     return {
@@ -342,7 +358,9 @@ def YumaSubtensorOld(
         "server_trust": T,
         "validator_trust": T_v,
         "validator_bond": B,
-        "validator_ema_bond": B_ema,
+        "validator_ema_bond": B_ema_normalized.to(torch.float64),
+        "validator_ema_bond_storage": B_storage.to(torch.float64),
+        "validator_ema_bond_post_read": B_storage_norm.to(torch.float64),
         "validator_reward": D,
         "validator_reward_normalized": D_normalized,
         "alpha": alpha,
@@ -433,9 +451,23 @@ def YumaSubtensor(
     B_ema_sum = B_ema.sum(dim=0)
     B_ema = B_ema / (B_ema_sum + 1e-9)
     B_ema = torch.nan_to_num(B_ema)
+    B_ema_normalized = B_ema.clone()
+
+    # Mimic pallet storage quantization: column max-upscale then u16 floor.
+    col_max = B_ema_normalized.max(dim=0, keepdim=True).values
+    scale = torch.where(col_max > 0, 1.0 / col_max, torch.zeros_like(col_max))
+    B_upscaled = torch.nan_to_num(B_ema_normalized * scale)
+    B_storage = torch.floor(B_upscaled.clamp(min=0.0, max=1.0) * U16_MAX_FLOAT + 1e-9)
+
+    B_storage_sum = B_storage.sum(dim=0, keepdim=True)
+    B_storage_norm = torch.where(
+        B_storage_sum > 0,
+        B_storage / B_storage_sum,
+        torch.zeros_like(B_storage),
+    )
 
     # === Dividend Calculation===
-    D = (B_ema * I).sum(dim=1)
+    D = (B_ema_normalized * I).sum(dim=1)
     D_normalized = D / D.sum().clamp(min=torch.finfo(D.dtype).eps)
 
 
@@ -450,7 +482,9 @@ def YumaSubtensor(
         "server_trust": T,
         "validator_trust": T_v,
         "validator_bond": B,
-        "validator_ema_bond": B_ema,
+        "validator_ema_bond": B_ema_normalized.to(torch.float64),
+        "validator_ema_bond_storage": B_storage.to(torch.float64),
+        "validator_ema_bond_post_read": B_storage_norm.to(torch.float64),
         "validator_reward": D,
         "validator_reward_normalized": D_normalized,
         "bond_alpha": alpha,

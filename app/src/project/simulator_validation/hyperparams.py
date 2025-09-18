@@ -83,6 +83,15 @@ def normalize_hyperparameters(raw_params: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         normalized["commit_reveal_period_epochs"] = 0
 
+    # Bond reset behavior for hotkey swaps
+    try:
+        bonds_reset = raw_params.get("bonds_reset_enabled")
+        if bonds_reset is None:
+            bonds_reset = raw_params.get("reset_bonds_enabled")
+        normalized["bonds_reset_enabled"] = bool(bonds_reset) if bonds_reset is not None else False
+    except Exception:
+        normalized["bonds_reset_enabled"] = False
+
     return normalized
 
 

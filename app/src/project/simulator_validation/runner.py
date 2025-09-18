@@ -68,6 +68,13 @@ def validate_simulator(
                 )
     except Exception:
         pass
+    
+    # Propagate bond reset behavior to the case
+    try:
+        bonds_reset_enabled = cr_info.get("bonds_reset_enabled", False)
+        case.bonds_reset_enabled = bool(bonds_reset_enabled)
+    except Exception:
+        case.bonds_reset_enabled = False
 
     _, _, sim_bonds, sim_incentives_per_epoch, sim_normalized_dividends = _run_dynamic_simulation(
         case=case, yuma_version=yuma_simulation_name, yuma_config=yuma_config
