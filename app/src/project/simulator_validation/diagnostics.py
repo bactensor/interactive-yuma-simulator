@@ -183,13 +183,11 @@ def analyze_divergent_incentives(
     sim_comparison_idx: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     divergences: List[Dict[str, Any]] = []
-    logger.info(f"analyze_divergent_incentives: epoch_idx={epoch_idx}, case.metas length={len(case.metas)}")
     if epoch_idx >= len(case.metas):
         logger.warning(f"epoch_idx {epoch_idx} >= case.metas length {len(case.metas)}")
         return divergences
     epoch_meta = case.metas[epoch_idx]
     real_incentives = epoch_meta.get("incentives", None)
-    logger.info(f"real_incentives type: {type(real_incentives)}, is None: {real_incentives is None}")
     if real_incentives is None or not isinstance(real_incentives, torch.Tensor):
         logger.warning(f"No real_incentives tensor found in epoch_meta for epoch {epoch_idx}")
         return divergences
@@ -199,8 +197,6 @@ def analyze_divergent_incentives(
         else []
     )
     hotkeys = epoch_meta.get("hotkeys", [])
-    logger.info(f"miner_uids: {miner_uids}, hotkeys length: {len(hotkeys)}")
-    logger.info(f"sim_incentives keys: {list(sim_incentives.keys()) if isinstance(sim_incentives, dict) else type(sim_incentives)}")
     for miner_idx, miner_uid in enumerate(miner_uids):
         if miner_uid >= len(hotkeys):
             continue
@@ -217,7 +213,6 @@ def analyze_divergent_incentives(
                 sim_incentive = float(seq[sim_comparison_idx])
             elif seq:
                 sim_incentive = float(seq[-1])
-            logger.debug(f"Miner {miner_uid} ({miner_hotkey[:10]}): sim_incentive={sim_incentive}, seq_len={len(seq)}, sim_comparison_idx={sim_comparison_idx}")
         real_incentive = (
             float(real_incentives[miner_uid])
             if miner_uid < real_incentives.shape[0]
