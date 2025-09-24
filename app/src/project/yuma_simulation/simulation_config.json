@@ -5,7 +5,6 @@
       "output_dir": "results",
       "metagraphs_dir": "metagraphs",
       "download_new_metagraph": false,
-      "epochs_padding": 20,
       "epochs_window": 20
     },
     "scenarios": [

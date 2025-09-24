@@ -20,7 +20,7 @@ Data Initialization:
 On the first run, set download_new_metagraph to true so that the necessary metagraph data is downloaded.
 
 Epoch Parameters:
-Adjust epochs_padding to ignore an appropriate number of initial epochs (typically 20–40) to allow the bonds and weights to stabilize, and set epochs_window to define how many epochs are averaged together in the output tables.
+Set epochs_window to define how many epochs are averaged together in the output tables.
 
 Scenarios:
 Each scenario under the scenarios array specifies a distinct simulation run for a particular subnet. Configure the subnet ID, number of epochs, tempo, the validator to shift (simulate higher GPU load), and which top validators to include in the output charts and tables.

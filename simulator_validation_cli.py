@@ -44,7 +44,6 @@ def main() -> int:
     parser.add_argument('--days-ago', type=int, default=1, help='Days ago to end data fetch (default: 1)')
     parser.add_argument('--tolerance', type=float, default=1e-4, help='Numerical tolerance for comparisons')
     parser.add_argument('--num-epochs', type=int, default=3, help='Number of epochs to validate/fetch')
-    # Block-based controls
     parser.add_argument('--start-block', type=int, default=None, help='Start block (overrides start_date)')
     parser.add_argument('--end-block', type=int, default=None, help='End block (overrides end_date)')
     parser.add_argument('--no-diagnostics', action='store_true', help='Disable diagnostic artifact generation on failure')

@@ -320,7 +320,6 @@ MGRAPH_BASE_URL = os.environ.get("MGRAPH_BASE_URL", "")
 MGRAPH_USERNAME = os.environ.get("MGRAPH_USERNAME", "")
 MGRAPH_PASSWORD = os.environ.get("MGRAPH_PASSWORD", "")
 
-EPOCHS_PADDING = os.environ.get("EPOCHS_PADDING", "10")
 ENABLE_METAGRAPH_DIAGNOSTICS = env.bool("ENABLE_METAGRAPH_DIAGNOSTICS", default=False)
 
 if 'prod' in ENV:

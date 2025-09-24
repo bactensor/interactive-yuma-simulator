@@ -1,7 +1,7 @@
 import logging
 import re
 from urllib.parse import urljoin
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import requests
 from typing import Optional, Dict, Any
@@ -166,6 +166,65 @@ def fetch_metagraph_weights_stakes(
         raise requests.HTTPError(msg, response=r)
 
     return r.json()
+
+def fetch_metagraph_data_with_initial_bonds(
+    *,
+    netuid: int,
+    start_date: datetime,
+    end_date: datetime,
+) -> dict:
+    """
+    Fetch metagraph weights/stakes data and pad the range by one extra epoch
+    to obtain bonds for simulator initialization.
+
+    This function:
+    1. Adjusts the requested window to include one extra epoch at the start
+    2. Fetches weights/stakes for the expanded range
+    3. Fetches rewards (bonds) for the first block to initialize the simulator
+    4. Merges the data and returns it
+    """
+    #TODO Lack of bonds should be displayed to the user in the UI probably, not just logged - or epoch padding could be used as a fallback
+
+    adjusted_start_date = start_date - timedelta(seconds=360 * 12)  # 360 blocks * 12 seconds
+
+    weights_stakes_data = fetch_metagraph_weights_stakes(
+        netuid=netuid,
+        start_date=adjusted_start_date,
+        end_date=end_date,
+    )
+
+    blocks = weights_stakes_data.get("blocks", [])
+
+    # We only need the initial bonds to seed the simulator
+    try:
+        if blocks:
+            first_block = blocks[0]
+            logger.info("Fetching initial bonds for block %s, netuid %s", first_block, netuid)
+
+            rewards_data = fetch_metagraph_rewards(
+                netuid=netuid,
+                start_block=first_block,
+                end_block=first_block,
+            )
+
+            bonds_data = rewards_data.get("bonds", {})
+            first_block_key = str(first_block)
+            first_block_bonds = bonds_data.get(first_block_key, {})
+
+            if first_block_bonds:
+                weights_stakes_data["bonds"] = {first_block_key: first_block_bonds}
+                logger.info("Initial bonds fetched successfully for block %s", first_block)
+            else:
+                logger.warning("No bonds data found for block %s. Simulator will start with zero bonds.", first_block)
+                weights_stakes_data["bonds"] = {}
+        else:
+            logger.warning("No blocks available to fetch initial bonds")
+            weights_stakes_data["bonds"] = {}
+    except Exception as e:
+        logger.warning("Failed to fetch initial bonds: %s (type=%s). Simulator will start with zero bonds.", e, type(e).__name__)
+        weights_stakes_data["bonds"] = {}
+
+    return weights_stakes_data
 
 
 def fetch_metagraph_rewards(

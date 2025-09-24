@@ -3,7 +3,7 @@ import logging
 import re
 import traceback
 from dataclasses import asdict
-from datetime import datetime, timedelta
+from datetime import datetime
 from functools import lru_cache
 from django.http import HttpResponseBadRequest
 from django.conf import settings
@@ -20,7 +20,7 @@ from project.yuma_simulation.v1 import api as yuma_api
 from project.yuma_simulation.v1.api import generate_chart_table, generate_metagraph_based_chart_table
 
 from .forms import SelectionForm, SimulationHyperparametersForm, YumaParamsForm
-from .utils import ONE_MILLION, UINT16_MAX, fetch_metagraph_weights_stakes, normalize
+from .utils import ONE_MILLION, UINT16_MAX, fetch_metagraph_data_with_initial_bonds, normalize
 
 logger = logging.getLogger(__name__)
 
@@ -197,6 +197,8 @@ def metagraph_simulation_view(request):
             end_date   = datetime.fromisoformat(raw_end)   if raw_end   else None
         except ValueError:
             return HttpResponseBadRequest("Dates must be in YYYY-MM-DD format.")
+        if start_date is None or end_date is None:
+            return HttpResponseBadRequest("start_date and end_date query parameters are required.")
         netuid = int(request.GET.get("netuid", 0))
         requested_miners = [m.strip()
                     for m in request.GET.getlist("miners_hotkeys")
@@ -228,12 +230,9 @@ def metagraph_simulation_view(request):
 
     yuma_params = YumaParams(**mg_yuma_kwargs)
 
-    #TODO since now we got fetch_metagraph_rewards, we can populate the simulator bonds in the -1 epoch, so epoch padding would be fixed to 1
-    epochs_padding = int(settings.EPOCHS_PADDING)
-    start_date = start_date - timedelta(seconds=360 * 12 * epochs_padding)
+
     try:
-        # Fetch weights and stakes data
-        mg_data = fetch_metagraph_weights_stakes(
+        mg_data = fetch_metagraph_data_with_initial_bonds(
             start_date=start_date,
             end_date=end_date,
             netuid=netuid,
@@ -271,7 +270,8 @@ def metagraph_simulation_view(request):
             mg_data=mg_data,
             requested_miners=requested_miners,
             **case_config,
-            )
+        )
+
     except ValueError as e:
         return HttpResponse(str(e), status=400)
 
@@ -295,7 +295,6 @@ def metagraph_simulation_view(request):
         summary_versions=summary_versions,
         normal_case=case,
         yuma_hyperparameters=sim_params,
-        epochs_padding=epochs_padding,
         engine='plotly' if js_charts else 'matplotlib',
     )
 

@@ -755,7 +755,7 @@ def _call_yuma(
             num_validators=len(case.validators),
             use_full_matrices=case.use_full_matrices
         )
-        B_state = result["validator_bonds_storage"]
+        B_state = result["validator_bonds"]
         C_state = result["server_consensus_weight"]
 
     elif yuma_version in [simulation_names.YUMA1]:
@@ -928,18 +928,29 @@ def _align_bond_state(
         new_B_state[validator_tensor[:, None], miner_tensor] = \
             B_state[old_validator_tensor[:, None], old_miner_tensor]
 
-    # For new validators (not overlapping), initialize from case.bonds_epochs[epoch] if available
+    # For new validators (not overlapping), initialize from case.bonds_epochs_raw[epoch] if available
+    # This is for edge case when validator was not active because of not updating weights but suddenly becomes active again
+    # Currently this is possible only for the test/validation case where we have bonds for all epochs
+    # TODO figure out how to handle this properly in actual simulation - currently it resets the bonds which must be built from 0.
     if case is not None and hasattr(case, 'bonds_epochs_raw') and epoch is not None:
         if 0 <= epoch < len(case.bonds_epochs_raw):
             epoch_bonds = case.bonds_epochs_raw[epoch]
-            for i, validator in enumerate(current_validators):
-                if validator not in old_validator_map:
-                    for j, miner in enumerate(current_miner_indices):
-                        if miner in old_miner_map:
-                            old_j = old_miner_map[miner]
-                            new_B_state[i, j] = epoch_bonds[i, old_j] if i < epoch_bonds.shape[0] else 0.0
-                        else:
-                            new_B_state[i, j] = 0.0
+            # Only use epoch_bonds if it's not None (frontend only has bonds for epoch 0)
+            if epoch_bonds is not None:
+                for i, validator in enumerate(current_validators):
+                    if validator not in old_validator_map:
+                        for j, miner in enumerate(current_miner_indices):
+                            if miner in old_miner_map:
+                                old_j = old_miner_map[miner]
+                                new_B_state[i, j] = epoch_bonds[i, old_j] if i < epoch_bonds.shape[0] else 0.0
+                            else:
+                                new_B_state[i, j] = 0.0
+            else:
+                # If epoch_bonds is None (typical for frontend after epoch 0),
+                # default new validators' bonds to 0
+                for i, validator in enumerate(current_validators):
+                    if validator not in old_validator_map:
+                        new_B_state[i, :] = 0.0
         else:
             # If epoch index is out of range, default new validators' bonds to 0
             for i, validator in enumerate(current_validators):
@@ -1248,7 +1259,6 @@ def _generate_relative_dividends_comparisson_table(
     yuma_versions: list[tuple[str, YumaParams]],
     simulation_hyperparameters: SimulationHyperparameters,
     epochs_window: int,
-    epochs_padding: int,
 ) -> pd.DataFrame:
     """
     Compares the *relative dividends* of a single validator (typically the base_validator)
@@ -1272,11 +1282,10 @@ def _generate_relative_dividends_comparisson_table(
             case_shifted=case_shifted,
             simulation_hyperparameters=simulation_hyperparameters,
             epochs_window=epochs_window,
-            epochs_padding=epochs_padding,
         )
         version_frames[yuma_version_name] = frames
 
-    num_epochs = case_normal.num_epochs - epochs_padding
+    num_epochs = case_normal.num_epochs
     rows = _build_comparison_rows(version_frames, epochs_window, num_epochs, yuma_versions)
 
     df = pd.DataFrame(rows)
@@ -1297,12 +1306,11 @@ def _compute_version_frames(
     case_shifted: BaseCase,
     simulation_hyperparameters: SimulationHyperparameters,
     epochs_window: int,
-    epochs_padding: int,
 ) -> dict:
     """
     For a given Yuma version and its parameters, run the dynamic simulations for both
     the normal and shifted cases; compute the relative dividend series for the base
-    validator; apply epoch padding; then calculate per-window (frame) averages and totals.
+    validator; then calculate per-window (frame) averages and totals.
     Returns a dictionary containing:
       - "normal_frames", "shifted_frames", "comparison_frames" (lists of per-window averages)
       - "total_normal", "total_shifted", "total_comparison" (overall totals)
@@ -1340,10 +1348,7 @@ def _compute_version_frames(
             comp = (divs_shifted[i] - divs_normal[i]) / stake_val
         comparison_series.append(comp)
 
-    divs_normal = divs_normal[epochs_padding:]
-    divs_shifted = divs_shifted[epochs_padding:]
-    comparison_series = comparison_series[epochs_padding:]
-    num_epochs = case_normal.num_epochs - epochs_padding
+    num_epochs = case_normal.num_epochs
 
     if epochs_window <= 0:
         raise ValueError(f"epochs_window must be > 0. Got {epochs_window}.")
