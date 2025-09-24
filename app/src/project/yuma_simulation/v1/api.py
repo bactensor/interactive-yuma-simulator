@@ -1,5 +1,6 @@
 import pandas as pd
 import logging
+import torch
 from IPython.display import HTML
 
 from project.yuma_simulation._internal.cases import BaseCase
@@ -11,10 +12,10 @@ from project.yuma_simulation._internal.charts_utils import (
     _plot_validator_server_weights_subplots_dynamic,
     _generate_relative_dividends_summary_html,
     _pick_default_miners,
+    _prepare_data_for_display,
 )
 from project.yuma_simulation._internal.simulation_utils import (
     _generate_html_table,
-    _generate_draggable_html_table,
     _generate_ipynb_table,
     _run_simulation,
     _run_dynamic_simulation,
@@ -98,7 +99,6 @@ def generate_metagraph_based_chart_table(
     summary_versions: tuple[str, YumaParams] | list[tuple[str, YumaParams]],
     normal_case: BaseCase,
     yuma_hyperparameters: SimulationHyperparameters,
-    epochs_padding: int,
     diff_versions: tuple[str, str] | None = None,
     draggable_table: bool = False,
     engine: str = 'matplotlib',
@@ -121,10 +121,14 @@ def generate_metagraph_based_chart_table(
     incentives_by_version: dict[str, list[torch.Tensor]] = {}
     for version, params in summary_versions:
         config = YumaConfig(simulation=yuma_hyperparameters, yuma_params=params)
-        _, rel_divs, bonds, incentives = _run_dynamic_simulation(
+        divs, rel_divs, bonds, incentives, _ = _run_dynamic_simulation(
             case=normal_case,
             yuma_version=version,
             yuma_config=config,
+        )
+        # Prepare data for display (remove epoch 0 from case)
+        _, rel_divs, bonds, incentives, display_case = _prepare_data_for_display(
+            divs, rel_divs, bonds, incentives, normal_case
         )
         rel_divs_by_version[version] = rel_divs
         bonds_by_version[version] = bonds
@@ -143,46 +147,51 @@ def generate_metagraph_based_chart_table(
             bonds    = bonds_by_version[version]
             incentives = incentives_by_version[version]
         else:
-            _, rel_divs, bonds, incentives = _run_dynamic_simulation(
+            divs, rel_divs, bonds, incentives, _ = _run_dynamic_simulation(
                 case         = normal_case,
                 yuma_version = version,
                 yuma_config  = config,
             )
+
+        # Always prepare display case (trim epoch 0)
+        _, rel_divs, bonds, incentives, display_case = _prepare_data_for_display(
+            divs if 'divs' in locals() else {},
+            rel_divs,
+            bonds,
+            incentives,
+            normal_case
+        )
         deafult_miners = _pick_default_miners(incentives)
         chart_rel = _plot_relative_dividends(
             validators_relative_dividends=rel_divs,
             case_name=final_name,
-            case=normal_case,
-            num_epochs=normal_case.num_epochs,
-            epochs_padding=epochs_padding,
+            case=display_case,
+            num_epochs=display_case.num_epochs,
             to_base64=True,
             engine=engine,
         )
         chart_weights = _plot_validator_server_weights_subplots_dynamic(
-            case=normal_case,
+            case=display_case,
             default_miners=deafult_miners,
             case_name=final_name,
             to_base64=True,
-            epochs_padding=epochs_padding,
             engine=engine,
         )
         chart_bonds = _plot_bonds_metagraph_dynamic(
-            case=normal_case,
+            case=display_case,
             bonds_per_epoch=bonds,
             default_miners=deafult_miners,
             case_name=final_name,
             to_base64=True,
-            epochs_padding=epochs_padding,
             engine=engine,
         )
         chart_bonds_norm = _plot_bonds_metagraph_dynamic(
-            case=normal_case,
+            case=display_case,
             bonds_per_epoch=bonds,
             default_miners=deafult_miners,
             case_name=final_name,
             to_base64=True,
             normalize=True,
-            epochs_padding=epochs_padding,
             engine=engine,
         )
         table_data[version].extend([chart_rel, chart_weights, chart_bonds, chart_bonds_norm])
@@ -191,7 +200,6 @@ def generate_metagraph_based_chart_table(
         relative_dividends_by_version={v: rel_divs_by_version[v] for v, _ in summary_versions},
         top_validators=top_vals,
         diff_versions=diff_versions,
-        epochs_padding=epochs_padding,
         num_epochs=normal_case.num_epochs,
         alpha_tao_ratio=yuma_hyperparameters.alpha_tao_ratio,
         label_map=normal_case.hotkey_label_map,
@@ -212,7 +220,6 @@ def generate_metagraph_based_chart_table_shifted_comparisson(
     normal_case: BaseCase,
     shifted_case: BaseCase,
     yuma_hyperparameters: SimulationHyperparameters,
-    epochs_padding: int,
     draggable_table: bool = False,
 ) -> HTML:
     """
@@ -234,12 +241,12 @@ def generate_metagraph_based_chart_table_shifted_comparisson(
             normal_case, shifted_case, yuma_version, yuma_config
         )
 
-        _, validators_relative_dividends_normal, bonds_per_epoch, _ = _run_dynamic_simulation(
+        _, validators_relative_dividends_normal, bonds_per_epoch, _, _ = _run_dynamic_simulation(
             case=normal_case,
             yuma_version=yuma_version,
             yuma_config=yuma_config,
         )
-        _, validators_relative_dividends_shifted, _, _ = _run_dynamic_simulation(
+        _, validators_relative_dividends_shifted, _, _, _ = _run_dynamic_simulation(
             case=shifted_case,
             yuma_version=yuma_version,
             yuma_config=yuma_config,
@@ -250,7 +257,6 @@ def generate_metagraph_based_chart_table_shifted_comparisson(
             case_name=final_case_name_normal,
             case=normal_case,
             num_epochs=normal_case.num_epochs,
-            epochs_padding=epochs_padding,
             to_base64=True,
         )
         chart_shifted = _plot_relative_dividends(
@@ -258,14 +264,12 @@ def generate_metagraph_based_chart_table_shifted_comparisson(
             case_name=final_case_name_shifted,
             case=shifted_case,
             num_epochs=shifted_case.num_epochs,
-            epochs_padding=epochs_padding,
             to_base64=True,
         )
         chart_comparisson = _plot_relative_dividends_comparisson(
             validators_relative_dividends_normal=validators_relative_dividends_normal,
             validators_relative_dividends_shifted=validators_relative_dividends_shifted,
             num_epochs=normal_case.num_epochs,  # Assuming same epochs.
-            epochs_padding=epochs_padding,
             case=normal_case,
             to_base64=True,
         )
@@ -273,7 +277,6 @@ def generate_metagraph_based_chart_table_shifted_comparisson(
             validators_relative_dividends_normal=validators_relative_dividends_normal,
             validators_relative_dividends_shifted=validators_relative_dividends_shifted,
             num_epochs=normal_case.num_epochs,
-            epochs_padding=epochs_padding,
             case=normal_case,
             to_base64=True,
             use_stakes=True,

@@ -7,6 +7,7 @@ import textwrap
 import numpy as np
 import io
 import base64
+import logging
 
 from matplotlib.axes import Axes
 from matplotlib.ticker import FuncFormatter
@@ -30,6 +31,8 @@ from project.yuma_simulation._internal.charts_data import (
     _prepare_validator_server_weights_data,
     _prepare_incentives_data,
 )
+
+logger = logging.getLogger(__name__)
 
 # TODO: refactor to not use it?
 from project.yuma_simulation._internal.charts_data import (
@@ -62,14 +65,13 @@ def _plot_relative_dividends_matplotlib(
     case_name: str,
     case: BaseCase,
     num_epochs: int,
-    epochs_padding: int = 0,
     to_base64: bool = False
 ) -> str | None:
     plt.close("all")
 
     # Use common data preparation
     data = _prepare_relative_dividends_data(
-        validators_relative_dividends, case, num_epochs, epochs_padding
+        validators_relative_dividends, case, num_epochs
     )
     if data is None:
         logger.warning("Nothing to plot (padding/empty data).")
@@ -133,12 +135,11 @@ def _plot_bonds_metagraph_dynamic_matplotlib(
     to_base64: bool = False,
     normalize: bool = False,
     legend_validators: list[str] | None = None,
-    epochs_padding: int = 0,
 ) -> str | None:
 
     # Use common data preparation
     data = _prepare_bonds_metagraph_data(
-        case, bonds_per_epoch, default_miners, normalize, epochs_padding
+        case, bonds_per_epoch, default_miners, normalize
     )
     if data is None:
         logger.warning("Nothing to plot (padding >= total_epochs).")
@@ -279,14 +280,13 @@ def _plot_bonds_metagraph_dynamic_matplotlib(
 def _plot_validator_server_weights_subplots_dynamic_matplotlib(
     case: MetagraphCase,
     default_miners: list[str],
-    epochs_padding: int = 0,
     to_base64: bool = False,
 ) -> str | None:
     """
     Dynamic version for metagraph-based weights using matplotlib
     """
     # Use common data preparation
-    data = _prepare_validator_server_weights_subplots_dynamic_data(case, default_miners, epochs_padding)
+    data = _prepare_validator_server_weights_subplots_dynamic_data(case, default_miners)
     if data is None:
         print("Nothing to plot (padding >= total_epochs).")
         return None
@@ -428,7 +428,6 @@ def _plot_validator_server_weights_subplots_matplotlib(
     num_epochs: int,
     case_name: str,
     to_base64: bool = False,
-    epochs_padding: int = 0,
     **kwargs,
 ) -> str | None:
     """
@@ -437,7 +436,7 @@ def _plot_validator_server_weights_subplots_matplotlib(
     they allocate to that server from epoch 0..num_epochs-1.
     """
     data = _prepare_validator_server_weights_subplots_data(
-        validators, weights_epochs, servers, num_epochs, epochs_padding
+        validators, weights_epochs, servers, num_epochs
     )
 
     if data is None:
@@ -731,7 +730,6 @@ def _plot_relative_dividends_comparisson(
     validators_relative_dividends_shifted: dict[str, list[float]],
     case: BaseCase,
     num_epochs: int,
-    epochs_padding: int = 0,
     to_base64: bool = False,
     use_stakes: bool = False
 ) -> str | None:
@@ -744,11 +742,9 @@ def _plot_relative_dividends_comparisson(
     then each difference is divided by the normalized stake for that validator at that epoch.
     The mean is recomputed from the newly calculated differences.
 
-    The first `epochs_padding` records are omitted from the plot.
     """
     plt.close("all")
-    # Adjust the number of epochs to be plotted.
-    plot_epochs = num_epochs - epochs_padding
+    plot_epochs = num_epochs
     if plot_epochs <= 0:
         logger.warning("Epochs padding is too large relative to number of total epochs. Nothing to plot.")
         return None
@@ -790,12 +786,9 @@ def _plot_relative_dividends_comparisson(
         # Skip plotting if one of the series is missing or not long enough.
         if not normal_dividends or not shifted_dividends:
             continue
-        if len(normal_dividends) <= epochs_padding or len(shifted_dividends) <= epochs_padding:
+        if len(normal_dividends) == 0 or len(shifted_dividends) == 0:
             continue
 
-        # Slice off the first epochs_padding records.
-        normal_dividends = normal_dividends[epochs_padding:]
-        shifted_dividends = shifted_dividends[epochs_padding:]
 
         # Replace missing values (None) with np.nan.
         normal_dividends = np.array(
@@ -809,13 +802,8 @@ def _plot_relative_dividends_comparisson(
 
         relative_diff = shifted_dividends - normal_dividends
 
-        if df_stakes is not None and validator in df_stakes.columns:
+        if use_stakes and df_stakes is not None and validator in df_stakes.columns:
             stakes_series = df_stakes[validator].to_numpy()
-            # Ensure stakes series is sliced to match the dividends.
-            if len(stakes_series) > epochs_padding:
-                stakes_series = stakes_series[epochs_padding:]
-            else:
-                stakes_series = np.full_like(relative_diff, np.nan)
             with np.errstate(divide='ignore', invalid='ignore'):
                 relative_diff = np.where(stakes_series != 0, relative_diff / stakes_series, np.nan)
             mean_difference = _compute_mean(relative_diff) * 100

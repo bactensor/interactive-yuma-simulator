@@ -5,9 +5,11 @@ from typing import Any, Optional, Dict, List, Tuple
 import logging
 from .metagraph_utils import (
     slot_count, build_S_tensor, build_W_tensor,
+    build_bonds_tensor, build_dividends_tensor, build_incentives_tensor,
     pick_validators, run_block_diagnostics,
 )
 import random
+import os
 from django.conf import settings
 
 
@@ -105,6 +107,11 @@ class MetagraphCase(BaseCase):
     shift_validator_hotkey: str = ""
     base_validator: str = ""
     num_epochs: int = 40
+    max_validators: int = 64
+    # Commit–reveal period in epochs for masking bonds on reset entities.
+    # 0 means disabled.
+    commit_reveal_period_epochs: int = 0
+    bonds_reset_enabled: bool = False
 
     name: str = "Dynamic Metagraph Case"
     metas: list[dict] = field(default_factory=list)  # List of metagraph dicts: { "S": ..., "W": ..., "hotkeys": ... }
@@ -117,6 +124,7 @@ class MetagraphCase(BaseCase):
     miner_indices_epochs: list[list[int]] = field(default_factory=list, init=False)
     validators_epochs: list[list[str]] = field(default_factory=list, init=False)
     servers: list[list[str]] = field(default_factory=list, init=False)
+    blocks: list[int] = field(default_factory=list, init=False)
 
     hotkey_label_map: dict[str, str] = field(default_factory=dict, init=False)
     selected_servers: list[str] = field(default_factory=list, init=False)
@@ -143,7 +151,13 @@ class MetagraphCase(BaseCase):
         # For each metagraph (epoch), compute the validators and miner indices.
         for idx, meta in enumerate(self.metas):
             stakes_tensor = meta["S"]  # shape [n_validators]
-            mask = stakes_tensor >= 1000
+            # Allow overriding min stake threshold for validation (parity): default 0.0
+            try:
+                min_stake_str = os.getenv("SIM_VALIDATION_MIN_STAKE", "1000")
+                min_stake = float(min_stake_str)
+            except Exception:
+                min_stake = 1000.0
+            mask = stakes_tensor >= min_stake
 
             valid_indices = mask.nonzero(as_tuple=True)[0].tolist()
 
@@ -184,6 +198,9 @@ class MetagraphCase(BaseCase):
         hotkeys_by_blk  = {int(k): v for k, v in mg_data["hotkeys"].items()}
         weights         = mg_data["weights"]
         stakes          = mg_data["stakes"]
+        bonds           = mg_data.get("bonds", {})
+        dividends       = mg_data.get("dividends", {})
+        incentives      = mg_data.get("incentives", {})
         n_slots         = slot_count(hotkeys_by_blk)
 
         requested_validators = pick_validators(hotkeys_by_blk=hotkeys_by_blk, stakes=stakes)
@@ -196,11 +213,18 @@ class MetagraphCase(BaseCase):
             requested_miners = [hk for hk in requested_miners if hk in all_hks]
 
         # choose diagnostics blocks
-        diag_blocks = set(random.sample(blocks, min(10, len(blocks))))
+        # Always include first two epochs for bonds diagnostics
+        diag_blocks = set(blocks[:2]) if len(blocks) >= 2 else set(blocks[:1])
+        # Add random samples for remaining slots
+        remaining_blocks = blocks[2:] if len(blocks) > 2 else []
+        if remaining_blocks and len(diag_blocks) < 10:
+            additional_samples = min(10 - len(diag_blocks), len(remaining_blocks))
+            diag_blocks.update(random.sample(remaining_blocks, additional_samples))
         diagnostics_enabled = getattr(settings, "ENABLE_METAGRAPH_DIAGNOSTICS", False)
+        logger.info(f"Metagraph diagnostics enabled: {diagnostics_enabled}")
 
         metas: List[Dict[str, Any]] = []
-        for block in blocks:
+        for idx, block in enumerate(blocks):
             S = build_S_tensor(stakes[str(block)], n_slots)
             W = build_W_tensor(weights[str(block)], n_slots)
 
@@ -218,11 +242,33 @@ class MetagraphCase(BaseCase):
 
             hk = [t[0] for t in slot_view if t]
 
+            # Extract timing data for temporal weight masking
+            # Format: (hotkey, is_validator, is_active, uid, last_update, block_at_registration_id)
+            last_updates = [tpl[4] for tpl in slot_view]
+            blocks_at_registration = [tpl[5] for tpl in slot_view]
+
             # comparing the fetched dumper data with on-chain data for testing purposes
             if diagnostics_enabled and block in diag_blocks:
                 run_block_diagnostics(block, mg_data["netuid"], S, W, hk)
 
-            metas.append({"S": S, "W": W, "hotkeys": hk})
+            meta_dict = {
+                "S": S,
+                "W": W,
+                "hotkeys": hk,
+                "last_updates": last_updates,
+                "blocks_at_registration": blocks_at_registration
+            }
+            
+            # Add bonds, dividends, and incentives for all epochs where data is available
+            block_str = str(block)
+            if block_str in bonds:
+                meta_dict["bonds"] = build_bonds_tensor(bonds[block_str], n_slots)
+            if block_str in dividends:
+                meta_dict["dividends"] = build_dividends_tensor(dividends[block_str], n_slots)
+            if block_str in incentives:
+                meta_dict["incentives"] = build_incentives_tensor(incentives[block_str], n_slots)
+            
+            metas.append(meta_dict)
 
         case = cls(
             metas=metas,
@@ -232,6 +278,7 @@ class MetagraphCase(BaseCase):
         )
         case.hotkey_label_map = mg_data["labels"]
         case.selected_servers = requested_miners or []
+        case.blocks = blocks
 
         return case, invalid_miners
     
@@ -313,6 +360,74 @@ class MetagraphCase(BaseCase):
         df_stakes.index.name = "epoch"
         df_stakes = df_stakes.div(df_stakes.sum(axis=1), axis=0)
         return df_stakes
+
+    @property
+    def bonds_epochs_raw(self) -> list[Optional[torch.Tensor]]:
+        """Return filtered bond matrices in the same scale as on-chain storage."""
+        bonds: list[Optional[torch.Tensor]] = []
+        for i, meta in enumerate(self.metas):
+            if "bonds" not in meta:
+                bonds.append(None)
+                continue
+
+            B_full = meta["bonds"]
+            valid_indices = self.valid_indices_epochs[i]
+            miner_indices = self.miner_indices_epochs[i]
+            B_valid = B_full[valid_indices, :][:, miner_indices].clone()
+            bonds.append(B_valid.to(torch.float64))
+        return bonds
+
+    @property
+    def bonds_epochs(self) -> list[Optional[torch.Tensor]]:
+        """Return column-normalized bond matrices for analysis/comparison."""
+        normalized: list[Optional[torch.Tensor]] = []
+        for raw in self.bonds_epochs_raw:
+            if raw is None:
+                normalized.append(None)
+                continue
+            col_sums = raw.sum(dim=0, keepdim=True)
+            norm = torch.where(
+                col_sums > 0,
+                raw / col_sums,
+                torch.zeros_like(raw),
+            )
+            normalized.append(torch.nan_to_num(norm))
+        return normalized
+
+    @property
+    def dividends_epochs(self) -> list[Optional[torch.Tensor]]:
+        """
+        Return a list of dividends tensors (one per epoch) filtered to include only the valid
+        validators. Only available for first two epochs. Returns None for epochs without dividends data.
+        """
+        dividends = []
+        for i, meta in enumerate(self.metas):
+            if "dividends" in meta:
+                D_full = meta["dividends"]
+                valid_indices = self.valid_indices_epochs[i]
+                D_valid = D_full[valid_indices]
+                dividends.append(D_valid)
+            else:
+                dividends.append(None)
+        return dividends
+
+    @property
+    def incentives_epochs(self) -> list[Optional[torch.Tensor]]:
+        """
+        Return a list of incentives tensors (one per epoch) filtered to active miners only.
+        Only available for first two epochs. Returns None for epochs without incentives data.
+        """
+        incentives = []
+        for i, meta in enumerate(self.metas):
+            if "incentives" in meta:
+                I_full = meta["incentives"]
+                miner_indices = self.miner_indices_epochs[i]
+                # Filter to active miners only
+                I_miners = I_full[miner_indices]
+                incentives.append(I_miners)
+            else:
+                incentives.append(None)
+        return incentives
 
 
 def create_case(case_name: str, **kwargs) -> BaseCase:

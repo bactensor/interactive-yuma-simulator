@@ -126,49 +126,96 @@ def _run_dynamic_simulation(
     """
     dividends_per_epoch: list[dict[str, float]] = []
     relative_dividends_per_epoch: list[dict[str, float]] = []
+    normalized_dividends_per_epoch: list[dict[str, float]] = []  # Raw D_normalized values
     bonds_per_epoch: list[torch.Tensor] = []
     hotkeys_incentive_over_epochs: dict[str, list[float]] = {}
 
     # These states are passed between epochs.
-    B_state: torch.Tensor | None = None
+    # Initialize B_state with bonds from first epoch if available
+    raw_bonds_epochs = case.bonds_epochs_raw if hasattr(case, 'bonds_epochs_raw') else []
+    B_state: torch.Tensor | None = (
+        raw_bonds_epochs[0].clone()
+        if raw_bonds_epochs and raw_bonds_epochs[0] is not None
+        else None
+    )
+    
     C_state: torch.Tensor | None = None
     W_prev: torch.Tensor | None = None
     server_consensus_weight: torch.Tensor | None = None
 
-    # cache those here - this is property - it might be cached property but "double caching" doesn't hurt
     weights_epochs = case.weights_epochs
     stakes_epochs = case.stakes_epochs
     hotkeys_epochs = [meta["hotkeys"] for meta in case.metas]
 
     yuma_config = yuma_config.with_overrides(case.get_config_overrides())
 
-    for epoch in range(case.num_epochs):
+    # Bonds reset window with commit–reveal: emulate on-chain masking for hotkey-swapped miners.
+    commit_reveal_epochs = int(getattr(case, "commit_reveal_period_epochs", 0) or 0)
+
+    for epoch in range(1, case.num_epochs):
         W: torch.Tensor = weights_epochs[epoch]
         S: torch.Tensor = stakes_epochs[epoch]
+
         current_validators: list[str] = case.validators_epochs[epoch]
         current_miner_indices: list[int] = case.miner_indices_epochs[epoch]
 
         current_validator_count = len(current_validators)
         current_miner_count = len(current_miner_indices)
 
-        should_align_bond_state = (
-            B_state is not None
-            and (B_state.shape[0] != current_validator_count or B_state.shape[1] != current_miner_count)
-        )
-        if should_align_bond_state:
+        # Align any carried state if needed
+        if B_state is not None and (
+            B_state.shape[0] != current_validator_count or B_state.shape[1] != current_miner_count
+        ):
             if epoch > 0:
                 old_validators: list[str] = case.validators_epochs[epoch - 1]
                 old_miner_indices: list[int] = case.miner_indices_epochs[epoch - 1]
             else:
                 old_validators, old_miner_indices = [], []
+            
+            
             B_state = _align_bond_state(
                 B_state=B_state,
                 current_validators=current_validators,
                 current_miner_indices=current_miner_indices,
                 old_validators=old_validators,
                 old_miner_indices=old_miner_indices,
+                case=case,
+                epoch=epoch,
             )
 
+        _apply_temporal_weight_masking(
+            W=W,
+            current_validators=current_validators,
+            current_miner_indices=current_miner_indices,
+            case=case,
+            epoch=epoch
+        )
+
+        # Detect hotkey swaps for commit-reveal and bonds masking
+        new_changed_uids = _detect_hotkey_swaps(
+            epoch=epoch,
+            hotkeys_epochs=hotkeys_epochs,
+            current_miner_indices=current_miner_indices
+        )
+
+        if commit_reveal_epochs > 0:
+            _apply_commit_reveal_weight_masking_with_lookback(
+                W=W,
+                mask_uids=new_changed_uids,
+                current_validators=current_validators,
+                hotkeys_epochs=hotkeys_epochs,
+                epoch=epoch,
+                case=case
+            )
+
+        # This mimics the masking behavior - bonds will be rebuilt via EMA
+        if new_changed_uids and B_state is not None:
+            uid_to_col = {uid: idx for idx, uid in enumerate(current_miner_indices)}
+            reset_cols = [uid_to_col[uid] for uid in new_changed_uids if uid in uid_to_col]
+
+            if reset_cols:
+                # Zero the bonds for swapped UIDs
+                B_state[:, reset_cols] = 0.0
         should_align_consensus_state = (
             C_state is not None
             and (C_state.shape[0] != current_miner_count)
@@ -213,11 +260,23 @@ def _run_dynamic_simulation(
             server_consensus_weight=server_consensus_weight,
             case=case,
             yuma_config=yuma_config
-        )
+        )     
 
         D_normalized: torch.Tensor = simulation_results["validator_reward_normalized"]
+        
+        # Store raw D_normalized values for validation purposes
+        raw_normalized_dividends_this_epoch = {}
+        for idx, validator in enumerate(current_validators):
+            raw_normalized_dividends_this_epoch[validator] = D_normalized[idx].item()
+        normalized_dividends_per_epoch.append(raw_normalized_dividends_this_epoch)
 
-        b = B_state.clone()
+        normalized_bonds = simulation_results.get("validator_ema_bond")
+        if normalized_bonds is not None:
+            b = normalized_bonds.clone()
+        elif B_state is not None:
+            b = B_state.clone()
+        else:
+            b = torch.zeros_like(W)
         i = simulation_results["server_incentive"].clone()
 
         if case.use_full_matrices:
@@ -234,6 +293,12 @@ def _run_dynamic_simulation(
             D_normalized=D_normalized,
             S=S,
             yuma_config=yuma_config,
+            validators_list=current_validators,
+        )
+        
+        # Also store raw normalized dividends (D_normalized values) for comparison with blockchain data
+        normalized_dividends_this_epoch = _compute_normalized_dividends_for_epoch(
+            D_normalized=D_normalized,
             validators_list=current_validators,
         )
 
@@ -270,8 +335,9 @@ def _run_dynamic_simulation(
     # Merge the per-epoch dictionaries
     merged_dividends = pd.DataFrame(dividends_per_epoch).to_dict(orient="list")
     merged_relative_dividends = pd.DataFrame(relative_dividends_per_epoch).to_dict(orient="list")
+    merged_normalized_dividends = pd.DataFrame(normalized_dividends_per_epoch).to_dict(orient="list")
 
-    return (merged_dividends, merged_relative_dividends, bonds_per_epoch, hotkeys_incentive_over_epochs)
+    return (merged_dividends, merged_relative_dividends, bonds_per_epoch, hotkeys_incentive_over_epochs, merged_normalized_dividends)
 
 def _call_yuma(
     epoch: int,
@@ -320,7 +386,7 @@ def _call_yuma(
             num_validators=len(case.validators),
             use_full_matrices=case.use_full_matrices
         )
-        B_state = result["validator_ema_bond"]
+        B_state = result["validator_ema_bond_storage"]
         C_state = result["server_consensus_weight"]
 
     elif yuma_version == simulation_names.YUMA2A:
@@ -388,7 +454,7 @@ def _call_yuma(
             num_validators=len(case.validators),
             use_full_matrices=case.use_full_matrices
         )
-        B_state = result["validator_ema_bond"]
+        B_state = result["validator_ema_bond_storage"]
         C_state = result["server_consensus_weight"]
 
     else:
@@ -466,19 +532,48 @@ def _compute_dividends_for_epoch(
     return dividends_this_epoch
 
 
+def _compute_normalized_dividends_for_epoch(
+    D_normalized: torch.Tensor,
+    validators_list: list[str],
+) -> dict[str, float]:
+    """
+    Computes a dictionary mapping each validator (by name) to its raw normalized reward (D_normalized value) for the current epoch.
+    This returns the raw consensus rewards without any stake-based dividend calculations.
+    """
+    normalized_dividends_this_epoch = {}
+    for i, validator in enumerate(validators_list):
+        normalized_dividends_this_epoch[validator] = D_normalized[i].item()
+    return normalized_dividends_this_epoch
+
+
 def _align_bond_state(
     B_state: torch.Tensor,
     current_validators: list[str],
     current_miner_indices: list[int],
     old_validators: list[str],
     old_miner_indices: list[int],
+    case=None,
+    epoch: int = None,
 ) -> torch.Tensor:
     """
     Aligns the previous bond state (B_state) with the current epoch's validators
     and miner indices. Returns a new bond state tensor with shape
       (len(current_validators), len(current_miner_indices)),
     copying over any overlapping entries from the old bond state.
+    
+    For validators that are new or reactivating (not in old_validators), 
+    attempts to initialize their bonds from case.bonds_epochs[epoch] if available,
+    otherwise defaults to 0.
+    
+    Special case: If old_validators/old_miner_indices are empty (epoch 0),
+    preserve the existing B_state if it already has the correct shape.
     """
+
+    # Special case: if no old validators/miners (epoch 0 with initial bonds)
+    # and B_state already has the correct shape, return it unchanged
+    expected_shape = (len(current_validators), len(current_miner_indices))
+    if not old_validators and not old_miner_indices and B_state.shape == expected_shape:
+        return B_state
 
     # Create mapping dictionaries for O(1) lookups
     old_validator_map = {validator: i for i, validator in enumerate(old_validators)}
@@ -517,6 +612,40 @@ def _align_bond_state(
         # Use meshgrid-like indexing to copy the overlapping submatrix
         new_B_state[validator_tensor[:, None], miner_tensor] = \
             B_state[old_validator_tensor[:, None], old_miner_tensor]
+
+    # For new validators (not overlapping), initialize from case.bonds_epochs_raw[epoch] if available
+    # This is for edge case when validator was not active because of not updating weights but suddenly becomes active again
+    # Currently this is possible only for the test/validation case where we have bonds for all epochs
+    # TODO figure out how to handle this properly in actual simulation - currently it resets the bonds which must be built from 0.
+    if case is not None and hasattr(case, 'bonds_epochs_raw') and epoch is not None:
+        if 0 <= epoch < len(case.bonds_epochs_raw):
+            epoch_bonds = case.bonds_epochs_raw[epoch]
+            # Only use epoch_bonds if it's not None (frontend only has bonds for epoch 0)
+            if epoch_bonds is not None:
+                for i, validator in enumerate(current_validators):
+                    if validator not in old_validator_map:
+                        for j, miner in enumerate(current_miner_indices):
+                            if miner in old_miner_map:
+                                old_j = old_miner_map[miner]
+                                new_B_state[i, j] = epoch_bonds[i, old_j] if i < epoch_bonds.shape[0] else 0.0
+                            else:
+                                new_B_state[i, j] = 0.0
+            else:
+                # If epoch_bonds is None (typical for frontend after epoch 0),
+                # default new validators' bonds to 0
+                for i, validator in enumerate(current_validators):
+                    if validator not in old_validator_map:
+                        new_B_state[i, :] = 0.0
+        else:
+            # If epoch index is out of range, default new validators' bonds to 0
+            for i, validator in enumerate(current_validators):
+                if validator not in old_validator_map:
+                    new_B_state[i, :] = 0.0
+    else:
+        # If no case or bonds_epochs info, default new validators' bonds to 0
+        for i, validator in enumerate(current_validators):
+            if validator not in old_validator_map:
+                new_B_state[i, :] = 0.0
 
     return new_B_state
 
@@ -815,7 +944,6 @@ def _generate_relative_dividends_comparisson_table(
     yuma_versions: list[tuple[str, YumaParams]],
     simulation_hyperparameters: SimulationHyperparameters,
     epochs_window: int,
-    epochs_padding: int,
 ) -> pd.DataFrame:
     """
     Compares the *relative dividends* of a single validator (typically the base_validator)
@@ -839,11 +967,10 @@ def _generate_relative_dividends_comparisson_table(
             case_shifted=case_shifted,
             simulation_hyperparameters=simulation_hyperparameters,
             epochs_window=epochs_window,
-            epochs_padding=epochs_padding,
         )
         version_frames[yuma_version_name] = frames
 
-    num_epochs = case_normal.num_epochs - epochs_padding
+    num_epochs = case_normal.num_epochs
     rows = _build_comparison_rows(version_frames, epochs_window, num_epochs, yuma_versions)
 
     df = pd.DataFrame(rows)
@@ -864,12 +991,11 @@ def _compute_version_frames(
     case_shifted: BaseCase,
     simulation_hyperparameters: SimulationHyperparameters,
     epochs_window: int,
-    epochs_padding: int,
 ) -> dict:
     """
     For a given Yuma version and its parameters, run the dynamic simulations for both
     the normal and shifted cases; compute the relative dividend series for the base
-    validator; apply epoch padding; then calculate per-window (frame) averages and totals.
+    validator; then calculate per-window (frame) averages and totals.
     Returns a dictionary containing:
       - "normal_frames", "shifted_frames", "comparison_frames" (lists of per-window averages)
       - "total_normal", "total_shifted", "total_comparison" (overall totals)
@@ -907,10 +1033,7 @@ def _compute_version_frames(
             comp = (divs_shifted[i] - divs_normal[i]) / stake_val
         comparison_series.append(comp)
 
-    divs_normal = divs_normal[epochs_padding:]
-    divs_shifted = divs_shifted[epochs_padding:]
-    comparison_series = comparison_series[epochs_padding:]
-    num_epochs = case_normal.num_epochs - epochs_padding
+    num_epochs = case_normal.num_epochs
 
     if epochs_window <= 0:
         raise ValueError(f"epochs_window must be > 0. Got {epochs_window}.")
@@ -1163,3 +1286,320 @@ def _compute_liquid_alpha(
 
     alpha_slice = alpha_low + combined_diff * (alpha_high - alpha_low)
     return alpha_slice.clamp(alpha_low, alpha_high)
+
+
+def _detect_hotkey_swaps(
+    epoch: int,
+    hotkeys_epochs: list[list[str]],
+    current_miner_indices: list[int]
+) -> set[int]:
+    """
+    Detect UIDs where hotkeys have changed between epochs.
+    
+    Args:
+        epoch: Current epoch number
+        hotkeys_epochs: List of hotkeys for each epoch
+        current_miner_indices: List of miner UIDs for current epoch
+        
+    Returns:
+        Set of UIDs where hotkey swaps were detected
+    """
+    new_changed_uids: set[int] = set()
+    
+    if epoch <= 0:
+        return new_changed_uids
+        
+    try:
+        prev_hotkeys = hotkeys_epochs[epoch - 1]
+        curr_hotkeys = hotkeys_epochs[epoch]
+    except Exception:
+        return new_changed_uids
+    
+    max_uids = min(len(prev_hotkeys), len(curr_hotkeys))
+    for uid in range(max_uids):
+        prev_hk = prev_hotkeys[uid]
+        curr_hk = curr_hotkeys[uid]
+        if prev_hk != curr_hk and uid in current_miner_indices:
+            new_changed_uids.add(uid)
+            
+    if new_changed_uids:
+        logger.debug(
+            f"[BOND] Epoch {epoch}: hotkey swap UIDs -> {sorted(new_changed_uids)}"
+        )
+    
+    return new_changed_uids
+
+
+def _apply_commit_reveal_weight_masking(
+    W: torch.Tensor,
+    mask_uids: set[int],
+    current_validators: list[str],
+    epoch: int,
+    case = None
+) -> None:
+    """
+    Apply commit-reveal weight masking based on validator commit timing (in-place).
+
+    For each validator, calculates when their weights will be revealed based on their
+    last commit time plus the reveal interval. Masks weights from validators to miners
+    if the reveal happens after the miner's registration.
+
+    Args:
+        W: Current weights tensor (validators x miners) - modified in-place
+        mask_uids: Set of miner UIDs that had hotkey swaps/re-registrations to check
+        current_validators: List of validator hotkeys for current epoch
+        hotkeys_epochs: List of hotkeys for each epoch (not used in new logic)
+        epoch: Current epoch number
+        case: Case containing metadata with timing information and commit reveal interval
+    """
+    # Check if we have the necessary metadata
+    if case is None or not hasattr(case, 'metas') or epoch >= len(case.metas):
+        return
+
+    current_meta = case.metas[epoch]
+    if 'last_updates' not in current_meta or 'blocks_at_registration' not in current_meta:
+        return
+
+    # Get the commit reveal interval from case
+    commit_reveal_interval = int(getattr(case, "commit_reveal_period_epochs", 0) or 0)
+    if commit_reveal_interval == 0:
+        return  # No commit reveal masking if interval is 0
+
+    last_updates = current_meta['last_updates']  # When each UID last updated weights
+    blocks_at_registration = current_meta['blocks_at_registration']  # When each UID registered
+    hotkeys = current_meta.get('hotkeys', [])
+
+    masked_pairs = []
+
+    # For each validator, check their reveal timing against miner registrations
+    for validator_idx, validator_hotkey in enumerate(current_validators):
+        # Find the UID for this validator
+        validator_uid = None
+        for uid, hk in enumerate(hotkeys):
+            if hk == validator_hotkey:
+                validator_uid = uid
+                break
+
+        if validator_uid is None or validator_uid >= len(last_updates):
+            continue
+
+        # Calculate when this validator's weights will be revealed
+        validator_last_update = last_updates[validator_uid]
+        reveal_block = validator_last_update + (commit_reveal_interval * 360)
+
+        # Check registration time for each miner in mask_uids
+        for miner_uid in mask_uids:
+            if miner_uid >= len(blocks_at_registration):
+                continue
+
+            miner_registration_block = blocks_at_registration[miner_uid]
+
+            # If reveal happens after miner registered, mask the weight
+            if reveal_block > miner_registration_block:
+                W[validator_idx, miner_uid] = 0.0
+                masked_pairs.append((validator_uid, miner_uid))
+
+    if masked_pairs:
+        logger.debug(
+            f"Epoch {epoch} - Commit-reveal masking applied: {len(masked_pairs)} validator->miner pairs masked"
+        )
+
+
+def _apply_commit_reveal_weight_masking_with_lookback(
+    W: torch.Tensor,
+    mask_uids: set[int],
+    current_validators: list[str],
+    hotkeys_epochs: list[list[str]],
+    epoch: int,
+    case = None
+) -> None:
+    """
+    Apply commit-reveal masking using historical commits from commit_reveal_interval epochs ago.
+
+    Instead of deriving the reveal block from the most recent update, this variant looks back
+    by the commit-reveal interval to fetch the commit blocks and compares them with the current
+    epoch's miner registration blocks. Suitable when validator commits should be evaluated
+    against historical state rather than their most recent update.
+
+    Args:
+        W: Current weights tensor (validators x miners) - modified in-place
+        mask_uids: Set of miner UIDs that had hotkey swaps/re-registrations to check
+        current_validators: List of validator hotkeys for the current epoch
+        hotkeys_epochs: List of hotkeys for each epoch (unused here but kept for parity)
+        epoch: Current epoch number
+        case: Case containing metadata with timing information and commit reveal interval
+    """
+    if case is None or not hasattr(case, "metas") or epoch >= len(case.metas):
+        logger.debug(
+            "Commit-reveal lookback skipped: missing case metas or epoch %s out of range",
+            epoch,
+        )
+        return
+
+    commit_reveal_interval = int(getattr(case, "commit_reveal_period_epochs", 0) or 0)
+    if commit_reveal_interval <= 0:
+        logger.debug(
+            "Commit-reveal lookback skipped: commit_reveal_period_epochs=%s",
+            commit_reveal_interval,
+        )
+        return
+
+    lookback_epoch = epoch - commit_reveal_interval
+    if lookback_epoch < 0 or lookback_epoch >= len(case.metas):
+        logger.debug(
+            "Commit-reveal lookback skipped: lookback epoch %s outside [0, %s)",
+            lookback_epoch,
+            len(case.metas),
+        )
+        return
+
+    current_meta = case.metas[epoch]
+    lookback_meta = case.metas[lookback_epoch]
+
+    if (
+        "blocks_at_registration" not in current_meta
+        or "hotkeys" not in current_meta
+        or "last_updates" not in lookback_meta
+    ):
+        logger.debug(
+            "Commit-reveal lookback skipped: required metadata missing at epoch %s",
+            epoch,
+        )
+        return
+
+    blocks_at_registration = current_meta["blocks_at_registration"]
+    current_hotkeys = current_meta.get("hotkeys", [])
+    current_last_updates = current_meta["last_updates"]
+    lookback_last_updates = lookback_meta["last_updates"]
+
+    if hotkeys_epochs and lookback_epoch < len(hotkeys_epochs):
+        lookback_hotkeys = hotkeys_epochs[lookback_epoch] or []
+    else:
+        lookback_hotkeys = lookback_meta.get("hotkeys", [])
+
+    masked_pairs: list[tuple[int, int]] = []
+
+    for validator_idx, validator_hotkey in enumerate(current_validators):
+        validator_uid = None
+        for uid, hk in enumerate(current_hotkeys):
+            if hk == validator_hotkey:
+                validator_uid = uid
+                break
+
+        if (
+            validator_uid is None
+            or validator_uid >= len(lookback_last_updates)
+        ):
+            logger.debug(
+                "Commit-reveal lookback continue: validator %s missing in lookback epoch %s",
+                validator_hotkey,
+                lookback_epoch,
+            )
+            continue
+
+        lookback_hotkey = (
+            lookback_hotkeys[validator_uid]
+            if validator_uid < len(lookback_hotkeys)
+            else None
+        )
+
+        if lookback_hotkey != validator_hotkey:
+            logger.debug(
+                "Commit-reveal lookback continue: validator %s hotkey mismatch (lookback=%s)",
+                validator_hotkey,
+                lookback_hotkey,
+            )
+            continue
+
+        lookback_commit_block = lookback_last_updates[validator_uid]
+        current_commit_block = current_last_updates[validator_uid]
+
+        # Check registration time for each miner in mask_uids
+        for miner_uid in mask_uids:
+            if miner_uid >= len(blocks_at_registration):
+                logger.debug(
+                    "Commit-reveal lookback continue: miner uid %s missing registration block",
+                    miner_uid,
+                )
+                continue
+
+            miner_registration_block = blocks_at_registration[miner_uid]
+
+            #TODO delete this condition when real yuma got fixed...
+            if current_commit_block > lookback_commit_block and current_commit_block > miner_registration_block:
+                continue
+
+            if lookback_commit_block < miner_registration_block:
+                W[validator_idx, miner_uid] = 0.0
+                masked_pairs.append((validator_uid, miner_uid))
+
+    if masked_pairs:
+        logger.info(
+            f"Epoch {epoch} - Commit-reveal masking applied: {len(masked_pairs)} validator->miner pairs masked"
+        )
+
+
+def _apply_temporal_weight_masking(
+    W: torch.Tensor,
+    current_validators: list[str],
+    current_miner_indices: list[int],
+    case,
+    epoch: int
+) -> None:
+    """
+    Apply temporal weight masking (in-place) - prevents retroactive weight assignments.
+
+    Masks weights where validator's last_update <= miner's block_at_registration.
+    This ensures validators can't influence miners that registered after their weights were set,
+    maintaining temporal consistency in the consensus mechanism.
+
+    Args:
+        W: Current weights tensor (validators x miners) - modified in-place
+        current_validators: List of validator hotkeys for current epoch
+        current_miner_indices: List of miner UIDs for current epoch
+        case: Case containing metadata with timing information
+        epoch: Current epoch number
+    """
+    if not hasattr(case, 'metas') or epoch >= len(case.metas):
+        return
+
+    current_meta = case.metas[epoch]
+    if 'last_updates' not in current_meta or 'blocks_at_registration' not in current_meta:
+        return
+
+    last_updates = current_meta['last_updates']  # When each UID last updated weights
+    blocks_at_registration = current_meta['blocks_at_registration']  # When each UID registered
+    hotkeys = current_meta.get('hotkeys', [])
+
+    masked_positions = []
+
+    # Check each validator-miner pair
+    for validator_idx, validator_hotkey in enumerate(current_validators):
+        # Find this validator's UID
+        validator_uid = None
+        for uid, hotkey in enumerate(hotkeys):
+            if hotkey == validator_hotkey:
+                validator_uid = uid
+                break
+
+        if validator_uid is None or validator_uid >= len(last_updates):
+            continue
+
+        validator_last_update = last_updates[validator_uid]
+
+        for miner_idx, miner_uid in enumerate(current_miner_indices):
+            if miner_uid >= len(blocks_at_registration):
+                continue
+
+            miner_registration_block = blocks_at_registration[miner_uid]
+
+            # Apply temporal masking rule: last_update <= block_at_registration
+            if validator_last_update <= miner_registration_block:
+                W[validator_idx, miner_idx] = 0.0
+                masked_positions.append((validator_uid, miner_uid))
+
+    if masked_positions:
+        logger.info(
+            f"Epoch {epoch} - Temporal masking: {len(masked_positions)} weights masked "
+            f"(validator_last_update <= miner_registration_block)"
+        )

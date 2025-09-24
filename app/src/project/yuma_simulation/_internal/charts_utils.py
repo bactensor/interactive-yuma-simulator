@@ -133,7 +133,6 @@ def _plot_relative_dividends(
     case_name: str,
     case: BaseCase,
     num_epochs: int,
-    epochs_padding: int = 0,
     engine: str = "matplotlib",  # or "plotly"
     **kwargs,
 ) -> str | None:
@@ -146,11 +145,11 @@ def _plot_relative_dividends(
     """
     if engine == "matplotlib":
         return _plot_relative_dividends_matplotlib(
-            validators_relative_dividends, case_name, case, num_epochs, epochs_padding, **kwargs
+            validators_relative_dividends, case_name, case, num_epochs, **kwargs
         )
     elif engine == "plotly":
         return plot_relative_dividends_plotly(
-            validators_relative_dividends, case_name, case, num_epochs, epochs_padding, **kwargs
+            validators_relative_dividends, case_name, case, num_epochs, **kwargs
         )
     else:
         raise ValueError(f"Unknown plotting engine: {engine}")
@@ -252,7 +251,6 @@ def _plot_validator_server_weights_subplots(
     num_epochs: int,
     case_name: str,
     to_base64: bool = False,
-    epochs_padding: int = 0,
     engine: str = "matplotlib",  # or "plotly"
     **kwargs,
 ) -> str | None:
@@ -266,19 +264,18 @@ def _plot_validator_server_weights_subplots(
         num_epochs: Number of epochs to plot
         case_name: Name for the case/simulation
         to_base64: Whether to return matplotlib plot as base64 (matplotlib only)
-        epochs_padding: Number of epochs to skip from beginning
         engine: "matplotlib" or "plotly"
         **kwargs: Additional arguments passed to specific plotting function
     """
     if engine == "matplotlib":
         return _plot_validator_server_weights_subplots_matplotlib(
             validators, weights_epochs, servers, num_epochs, case_name,
-            to_base64, epochs_padding, **kwargs
+            to_base64, **kwargs
         )
     elif engine == "plotly":
         return plot_validator_server_weights_subplots_plotly(
             validators, weights_epochs, servers, num_epochs, case_name,
-            epochs_padding, **kwargs
+            **kwargs
         )
     else:
         raise ValueError(f"Unknown plotting engine: {engine}")
@@ -288,7 +285,6 @@ def _plot_validator_server_weights_subplots_dynamic(
     case: MetagraphCase,
     default_miners: list[str],
     case_name: str = "",
-    epochs_padding: int = 0,
     engine: str = "matplotlib",  # or "plotly"
     **kwargs,
 ) -> str | None:
@@ -301,11 +297,11 @@ def _plot_validator_server_weights_subplots_dynamic(
     """
     if engine == "matplotlib":
         return _plot_validator_server_weights_subplots_dynamic_matplotlib(
-            case, default_miners, epochs_padding, **kwargs
+            case, default_miners, **kwargs
         )
     elif engine == "plotly":
         return plot_validator_server_weights_subplots_dynamic_plotly(
-            case, default_miners, case_name, epochs_padding, **kwargs
+            case, default_miners, case_name, **kwargs
         )
     else:
         raise ValueError(f"Unknown plotting engine: {engine}")
@@ -379,7 +375,6 @@ def _generate_chart_for_type(
     final_case_name: str,
     simulation_results: tuple | None = None,
     to_base64: bool = True,
-    epochs_padding: int = 0,
     engine: str = 'matplotlib',
 ) -> str:
     """
@@ -424,7 +419,6 @@ def _generate_chart_for_type(
             case_name=final_case_name,
             case=case,
             num_epochs=case.num_epochs,
-            epochs_padding=epochs_padding,
             to_base64=to_base64,
             engine=engine,
         )
@@ -469,7 +463,6 @@ def _construct_relative_dividends_table(
     relative_dividends_by_version: dict[str, dict[str, list[float]]],
     validators: list[str],
     diff_versions: tuple[str, str] | None = None,
-    epochs_padding: int = 0,
     num_epochs: int = 0,
     alpha_tao_ratio: float = 1.0,
 ) -> pd.DataFrame:
@@ -479,7 +472,7 @@ def _construct_relative_dividends_table(
       - if diff_versions is provided, 'diff_<vA>_<vB>': scaled_mean_vA - scaled_mean_vB
 
     """
-    effective_epochs = num_epochs - epochs_padding
+    effective_epochs = num_epochs
     if effective_epochs < 0:
         effective_epochs = 0
 
@@ -493,9 +486,8 @@ def _construct_relative_dividends_table(
 
         for version, divs in relative_dividends_by_version.items():
             series = divs.get(v, [])
-            trimmed = series[epochs_padding:] if len(series) > epochs_padding else []
 
-            arr = np.array([x if (x is not None) else np.nan for x in trimmed], dtype=float)
+            arr = np.array([x if (x is not None) else np.nan for x in series], dtype=float)
 
             if arr.size > 0:
                 base_mean = float(np.nanmean(arr))
@@ -533,7 +525,6 @@ def _generate_relative_dividends_summary_html(
     relative_dividends_by_version: dict[str, dict[str, list[float]]],
     top_validators: list[str],
     diff_versions: tuple[str, str] | None = None,
-    epochs_padding: int = 0,
     num_epochs: int = 0,
     alpha_tao_ratio: float = 1.0,
     label_map: dict[str, str] | None = None,
@@ -542,7 +533,7 @@ def _generate_relative_dividends_summary_html(
     Build a Bootstrap‐styled HTML table for the scaled relative dividends
     of `top_validators` across Yuma versions, with optional display name mapping.
 
-    Scaled means by 361 * 0.41 * (num_epochs - epochs_padding) * alpha_tao_ratio.
+    Scaled means by 361 * 0.41 * num_epochs * alpha_tao_ratio.
     If `diff_versions` is provided, includes a diff column 'diff_vA_vB'.
     If `label_map` is given, uses that to replace validator IDs in the index.
     """
@@ -551,7 +542,6 @@ def _generate_relative_dividends_summary_html(
         relative_dividends_by_version,
         top_validators,
         diff_versions=diff_versions,
-        epochs_padding=epochs_padding,
         num_epochs=num_epochs,
         alpha_tao_ratio=alpha_tao_ratio,
     )
@@ -655,3 +645,55 @@ def _pick_default_miners(
             break
 
     return top_by_total + top_by_spread
+
+
+def _prepare_data_for_display(
+    dividends: dict[str, list[float]],
+    rel_divs: dict[str, list[float]],
+    bonds: list[torch.Tensor],
+    incentives: dict[str, list[float]],
+    case: BaseCase,
+) -> tuple[dict[str, list[float]], dict[str, list[float]], list[torch.Tensor], dict[str, list[float]], BaseCase]:
+    """
+    Trim case data to exclude initialization epoch 0 for chart display.
+    Simulation outputs already represent epochs 1-N.
+    """
+    class DisplayCase:
+        def __init__(self, original_case):
+            self.original_case = original_case
+
+        def __getattr__(self, name):
+            # Delegate all other attributes to original case
+            return getattr(self.original_case, name)
+
+        @property
+        def num_epochs(self):
+            return max(0, self.original_case.num_epochs - 1)
+
+        @property
+        def metas(self):
+            original_metas = self.original_case.metas
+            return original_metas[1:] if len(original_metas) > 1 else []
+
+        @property
+        def validators_epochs(self):
+            original = self.original_case.validators_epochs
+            return original[1:] if len(original) > 1 else []
+
+        @property
+        def miner_indices_epochs(self):
+            original = self.original_case.miner_indices_epochs
+            return original[1:] if len(original) > 1 else []
+
+        @property
+        def weights_epochs(self):
+            original = self.original_case.weights_epochs
+            return original[1:] if len(original) > 1 else []
+
+        @property
+        def stakes_epochs(self):
+            original = self.original_case.stakes_epochs
+            return original[1:] if len(original) > 1 else []
+
+    display_case = DisplayCase(case)
+    return dividends, rel_divs, bonds, incentives, display_case

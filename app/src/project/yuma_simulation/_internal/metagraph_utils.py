@@ -10,6 +10,7 @@ from .experiment_setup import ExperimentSetup
 from typing import Optional
 from typing import Dict, List, Set, Tuple
 
+# Hotkey tuple format: (hotkey, is_validator, is_active)
 HotkeyTuple = Tuple[str, bool, bool]
 
 logger = logging.getLogger(__name__)
@@ -196,11 +197,40 @@ def build_W_tensor(weight_map: Dict[str, Dict[str, float]],
     # Apply diagonal masking to remove self-weights (except for uid 0)
     # This matches the Rust implementation's inplace_mask_diag_except_index
     # where owner_uid is always 0
+    #TODO: Confirm if its actually implemented in subtensor - there was evidence on testing sessions that its not.
     for i in range(n_slots):
         if i != 0:  # Keep uid 0's self-weight
             W[i, i] = 0.0
     
     return W
+
+
+def build_bonds_tensor(bonds_map: Dict[str, Dict[str, float]],
+                      n_slots: int) -> torch.Tensor:
+    """Build bonds tensor from bonds mapping."""
+    B = torch.zeros((n_slots, n_slots), dtype=torch.float32)
+    for src_uid, row in bonds_map.items():
+        i = int(src_uid)
+        for tgt_uid, b in row.items():
+            j = int(tgt_uid)
+            B[i, j] = float(b)
+    return B
+
+
+def build_dividends_tensor(dividends_map: Dict[str, float], n_slots: int) -> torch.Tensor:
+    """Build dividends tensor from dividends mapping."""
+    D = torch.zeros(n_slots, dtype=torch.float32)
+    for uid, dividend in dividends_map.items():
+        D[int(uid)] = float(dividend)
+    return D
+
+
+def build_incentives_tensor(incentives_map: Dict[str, float], n_slots: int) -> torch.Tensor:
+    """Build incentives tensor from incentives mapping."""
+    I = torch.zeros(n_slots, dtype=torch.float32)
+    for uid, incentive in incentives_map.items():
+        I[int(uid)] = float(incentive)
+    return I
 
 def pick_validators(
     hotkeys_by_blk: Dict[int, List[HotkeyTuple]],
@@ -215,7 +245,13 @@ def pick_validators(
 
     for blk_int, slot_list in hotkeys_by_blk.items():
         for uid, slot in enumerate(slot_list):
-            hk, is_val, is_active = slot
+            # Process hotkey tuple: (hk, is_val, is_active)
+            try:
+                hk = slot[0]
+                is_val = bool(slot[1]) if len(slot) > 1 else False
+                is_active = bool(slot[2]) if len(slot) > 2 else False
+            except Exception:
+                continue
             if not (hk and is_val and is_active):
                 continue
 
@@ -233,11 +269,13 @@ def run_block_diagnostics(block: int,
                           S: torch.Tensor,
                           W: torch.Tensor,
                           hotkeys: List[str],
+                          B: Optional[torch.Tensor] = None,
                           tol: float = 1e-6) -> None:
     """
     Compare local S, W, hotkeys against on‑chain metagraph for a single block.
     Logs summary lines; raises nothing.
     """
+    logger.info(f"Starting diagnostics for block {block}, netuid {netuid}")
     try:
         st = get_archive_session()
         meta = st.metagraph(netuid=netuid,
@@ -266,6 +304,24 @@ def run_block_diagnostics(block: int,
     miss_h = [i for i, (o, l) in enumerate(zip(meta.hotkeys, hotkeys)) if o != l]
     if miss_h:
         logger.error("HOTKEY diff @%d (%d slots)", block, len(miss_h))
+    
+    if B is not None:
+        try:
+            meta_B = torch.from_numpy(meta.bonds)
+            # Compare bonds
+            diff_B = (meta_B - B).abs()
+            miss_b = torch.nonzero(diff_B > tol, as_tuple=False)
+            if miss_b.numel():
+                logger.error("BONDS diff @%d (%d cells)", block, miss_b.numel())
+                # Log some examples
+                sample_size = min(5, miss_b.size(0))
+                for i in range(sample_size):
+                    src, tgt = miss_b[i]
+                    logger.error("  Bond[%d->%d]: meta=%.6f, built=%.6f", 
+                               src.item(), tgt.item(), 
+                               meta_B[src, tgt].item(), B[src, tgt].item())
+        except Exception as e:
+            logger.warning("Failed to compare bonds @%d: %s", block, e)
 
 
 def diagnose_stake_issue(block: int, netuid: int, S: torch.Tensor, hotkeys: List[str]) -> None:

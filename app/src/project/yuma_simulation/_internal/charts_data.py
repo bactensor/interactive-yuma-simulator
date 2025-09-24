@@ -34,7 +34,6 @@ def _prepare_relative_dividends_data(
     validators_relative_dividends: dict[str, list[float]],
     case: BaseCase,
     num_epochs: int,
-    epochs_padding: int = 0,
 ) -> dict | None:
     """
     Prepare common data for relative dividends plotting.
@@ -43,7 +42,7 @@ def _prepare_relative_dividends_data(
         dict with keys: plot_epochs, all_validators, top_vals, x, validator_styles, series_data
         or None if nothing to plot
     """
-    plot_epochs = num_epochs - epochs_padding
+    plot_epochs = num_epochs
     if plot_epochs <= 0 or not validators_relative_dividends:
         return None
 
@@ -59,10 +58,10 @@ def _prepare_relative_dividends_data(
     series_data = []
     for idx, validator in enumerate(top_vals):
         series = validators_relative_dividends.get(validator, [])
-        if len(series) <= epochs_padding:
+        if len(series) == 0:
             continue
 
-        arr = np.array([d if d is not None else np.nan for d in series[epochs_padding:]], dtype=float)
+        arr = np.array([d if d is not None else np.nan for d in series], dtype=float)
         x_shifted = [x_val + idx * 0.05 for x_val in x]
         mean_pct = _compute_mean(arr) * 100
         label = f"{case.hotkey_label_map.get(validator, validator)}: total = {mean_pct:+.5f}%"
@@ -177,7 +176,6 @@ def _prepare_bonds_metagraph_data(
     bonds_per_epoch: list[torch.Tensor],
     default_miners: list[str],
     normalize: bool = False,
-    epochs_padding: int = 0,
 ) -> dict | None:
     """
     Prepare common data for bonds metagraph plotting.
@@ -186,7 +184,7 @@ def _prepare_bonds_metagraph_data(
         dict with plotting data or None if nothing to plot
     """
     num_epochs = case.num_epochs
-    plot_epochs = num_epochs - epochs_padding
+    plot_epochs = num_epochs
     if plot_epochs <= 0:
         return None
 
@@ -218,7 +216,7 @@ def _prepare_bonds_metagraph_data(
         per_val = []
         for vi in v_idx:
             series = []
-            for e in range(epochs_padding, num_epochs):
+            for e in range(num_epochs):
                 series.append(bonds_data[mi][vi][e])
             per_val.append(series)
         plot_data.append(per_val)
@@ -288,7 +286,6 @@ def _find_indices(
 def _prepare_validator_server_weights_subplots_dynamic_data(
     case: MetagraphCase,
     default_miners: list[str],
-    epochs_padding: int = 0,
 ) -> dict | None:
     """
     Prepare common data for validator server weights plotting.
@@ -297,7 +294,7 @@ def _prepare_validator_server_weights_subplots_dynamic_data(
         dict with plotting data or None if nothing to plot
     """
     total_epochs = case.num_epochs
-    plot_epochs = total_epochs - epochs_padding
+    plot_epochs = total_epochs
     if plot_epochs <= 0:
         return None
 
@@ -315,7 +312,7 @@ def _prepare_validator_server_weights_subplots_dynamic_data(
         per_val = []
         for val in subset_vals:
             series = []
-            for e in range(epochs_padding, total_epochs):
+            for e in range(total_epochs):
                 ve, se, W = validators_epochs[e], servers_epochs[e], weights_epochs[e]
                 if (val in ve) and (srv in se):
                     r, c = ve.index(val), se.index(srv)
@@ -350,7 +347,6 @@ def _prepare_validator_server_weights_subplots_data(
     weights_epochs: list[torch.Tensor],
     servers: list[str],
     num_epochs: int,
-    epochs_padding: int = 0,
 ) -> dict | None:
     """
     Prepare common data for validator server weights subplots plotting.
@@ -360,7 +356,7 @@ def _prepare_validator_server_weights_subplots_data(
     """
     from .simulation_utils import _slice_tensors
 
-    plot_epochs = num_epochs - epochs_padding
+    plot_epochs = num_epochs
     if plot_epochs <= 0:
         return None
 
@@ -377,7 +373,7 @@ def _prepare_validator_server_weights_subplots_data(
         for idx_v, validator in enumerate(validators):
             y_values = [
                 float(weights_epochs[epoch][idx_v][idx_s].item())
-                for epoch in range(epochs_padding, num_epochs)
+                for epoch in range(num_epochs)
             ]
             server_data.append(y_values)
         data_matrix.append(server_data)

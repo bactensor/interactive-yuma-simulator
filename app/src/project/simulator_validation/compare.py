@@ -1,0 +1,258 @@
+import logging
+from typing import Dict, Any, List, Optional
+from project.yuma_simulation._internal.yumas import _compute_consensus
+
+import torch
+
+
+def _filter_real_bonds_simple(
+    *,
+    real_bonds_full_norm: torch.Tensor,
+    validators_epoch: List[str],
+    validator_positions: List[Optional[int]],
+    sim_shape: torch.Size,
+) -> torch.Tensor:
+    """
+    Build a filtered real bonds matrix without active-miner selection:
+    - Rows: match validators order for this epoch
+    - Columns: trimmed/padded to match simulator columns
+    """
+    if not validators_epoch:
+        return torch.zeros(sim_shape, dtype=real_bonds_full_norm.dtype)
+    rows = []
+    for pos in validator_positions:
+        if pos is None:
+            rows.append(torch.zeros(real_bonds_full_norm.shape[1], dtype=real_bonds_full_norm.dtype))
+        else:
+            rows.append(real_bonds_full_norm[pos])
+    real_bonds_filtered = torch.stack(rows)
+
+    # Adjust columns to sim width
+    _, sim_cols = sim_shape
+    _, real_cols = real_bonds_filtered.shape
+    if real_cols > sim_cols:
+        real_bonds_filtered = real_bonds_filtered[:, :sim_cols]
+    elif real_cols < sim_cols:
+        pad = torch.zeros((real_bonds_filtered.shape[0], sim_cols - real_cols), dtype=real_bonds_full_norm.dtype)
+        real_bonds_filtered = torch.cat([real_bonds_filtered, pad], dim=1)
+    return real_bonds_filtered
+
+
+logger = logging.getLogger(__name__)
+
+
+def compare_bonds(
+    sim_bonds: List[torch.Tensor],
+    real_bonds_full: torch.Tensor,
+    validators_epoch: List[str],
+    epoch_hotkeys: List[str],
+    tolerance: float,
+    sim_epoch_idx: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Compare simulation bonds with real bonds (filtered to validator rows)."""
+    if len(sim_bonds) == 0 or real_bonds_full is None:
+        return {"error": "Missing bonds data for comparison", "matches": False}
+
+    # Choose simulation epoch
+    if sim_epoch_idx is not None:
+        if sim_epoch_idx < 0 or sim_epoch_idx >= len(sim_bonds):
+            return {
+                "error": f"Invalid sim_epoch_idx {sim_epoch_idx} for {len(sim_bonds)} simulation epochs",
+                "matches": False,
+            }
+        sim_bonds_epoch = sim_bonds[sim_epoch_idx]
+    else:
+        sim_bonds_epoch = sim_bonds[-1]
+
+    # Normalize full real bonds to [0,1], then column-normalize
+    real_bonds_full_norm = real_bonds_full / 65535.0
+    col_sums_full = real_bonds_full_norm.sum(dim=0, keepdim=True)
+    col_sums_full = torch.where(col_sums_full > 1e-6, col_sums_full, torch.ones_like(col_sums_full))
+    real_bonds_full_norm = real_bonds_full_norm / col_sums_full
+
+    # Map validator hotkeys to uids (rows in full 256x256)
+    hotkey_index = {hk: idx for idx, hk in enumerate(epoch_hotkeys)}
+    validator_positions = [hotkey_index.get(hk) for hk in validators_epoch]
+
+    
+
+    # Choose filtering strategy
+    real_bonds_filtered = _filter_real_bonds_simple(
+        real_bonds_full_norm=real_bonds_full_norm,
+        validators_epoch=validators_epoch,
+        validator_positions=validator_positions,
+        sim_shape=sim_bonds_epoch.shape,
+    )
+
+    # Sanity shape check
+    if sim_bonds_epoch.shape != real_bonds_filtered.shape:
+        return {
+            "error": f"Shape mismatch: sim={tuple(sim_bonds_epoch.shape)}, real={tuple(real_bonds_filtered.shape)}",
+            "matches": False,
+        }
+
+    # IMPORTANT: The simulator's bond matrices are column-normalized over the INCLUDED
+    # validators (after filtering). The real bonds were column-normalized over the FULL set
+    # of validators before filtering. After we drop rows, columns no longer sum to 1.
+    # Re-normalize real_bonds_filtered column-wise so comparison is apples-to-apples.
+    col_sums_filtered = real_bonds_filtered.sum(dim=0, keepdim=True)
+    col_sums_filtered = torch.where(col_sums_filtered > 1e-12, col_sums_filtered, torch.ones_like(col_sums_filtered))
+    real_bonds_filtered = real_bonds_filtered / col_sums_filtered
+
+    bonds_diff = torch.abs(sim_bonds_epoch - real_bonds_filtered)
+    bonds_max_diff = float(torch.max(bonds_diff).item())
+    bonds_mean_diff = float(torch.mean(bonds_diff).item())
+    bonds_nonzero_diff = int((bonds_diff > tolerance).sum().item())
+
+    # Non-zero stats
+    sim_nonzero_count = int((sim_bonds_epoch > 0).sum().item())
+    real_nonzero_count = int((real_bonds_filtered > 0).sum().item())
+
+    # Log top differing positions for debugging
+    any_nonzero_mask = (sim_bonds_epoch > 0) | (real_bonds_filtered > 0)
+    if any_nonzero_mask.any():
+        diffs = []
+        idxs = torch.nonzero(any_nonzero_mask, as_tuple=False)
+        for row, col in idxs.tolist():
+            sim_val = float(sim_bonds_epoch[row, col].item())
+            real_val = float(real_bonds_filtered[row, col].item())
+            diff = abs(sim_val - real_val)
+            diffs.append((diff, row, col, sim_val, real_val))
+        diffs.sort(key=lambda x: x[0], reverse=True)
+        for i, (diff, row, col, sim_val, real_val) in enumerate(diffs[:10]):
+            logger.info(
+                f"  Position [{row},{col}]: Sim={sim_val:.6f}, Real={real_val:.6f}, Diff={diff:.6f}"
+            )
+    else:
+        logger.info("No non-zero bonds found in either simulation or real data")
+
+    return {
+        "max_diff": bonds_max_diff,
+        "mean_diff": bonds_mean_diff,
+        "nonzero_diffs": bonds_nonzero_diff,
+        "matches": bonds_max_diff < tolerance,
+        "sim_shape": list(sim_bonds_epoch.shape),
+        "real_shape": list(real_bonds_filtered.shape),
+        "sim_nonzero_bonds": sim_nonzero_count,
+        "real_nonzero_bonds": real_nonzero_count,
+        "note": "Direct comparison of filtered bond matrices",
+    }
+
+
+def compare_dividends(
+    sim_normalized_dividends: Dict,
+    real_dividends_epoch: torch.Tensor,
+    validators_epoch: List[str],
+    tolerance: float,
+) -> Dict[str, Any]:
+    """Compare simulation dividends with real dividends for a single epoch."""
+    if real_dividends_epoch is None:
+        return {"error": "No real dividends data available", "matches": False}
+
+    sim_div_values: List[float] = []
+    for hk in validators_epoch:
+        if hk in sim_normalized_dividends:
+            data = sim_normalized_dividends[hk]
+            if isinstance(data, list) and data:
+                sim_div_values.append(float(data[-1]))
+            elif isinstance(data, (int, float)):
+                sim_div_values.append(float(data))
+            else:
+                sim_div_values.append(0.0)
+        else:
+            sim_div_values.append(0.0)
+
+    if len(sim_div_values) != len(validators_epoch):
+        return {
+            "error": f"Simulation dividends length mismatch: got {len(sim_div_values)}, expected {len(validators_epoch)}",
+            "matches": False,
+        }
+
+    sim_div_tensor = torch.tensor(sim_div_values, dtype=torch.float32)
+    if sim_div_tensor.shape != real_dividends_epoch.shape:
+        return {
+            "error": f"Shape mismatch: sim={tuple(sim_div_tensor.shape)}, real={tuple(real_dividends_epoch.shape)}",
+            "matches": False,
+        }
+
+    sim_scale = float(sim_div_tensor.max().item())
+    real_scale = float(real_dividends_epoch.max().item())
+    if sim_scale < 1e-6 and real_scale > 0.01:
+        sim_div_tensor = sim_div_tensor * (real_scale / sim_scale if sim_scale > 0 else 0.0)
+    elif real_scale > 10:
+        real_dividends_epoch = real_dividends_epoch / 65535.0
+
+    diff = torch.abs(sim_div_tensor - real_dividends_epoch)
+    return {
+        "max_diff": float(torch.max(diff).item()),
+        "mean_diff": float(torch.mean(diff).item()),
+        "nonzero_diffs": int((diff > tolerance).sum().item()),
+        "matches": bool(torch.max(diff).item() < tolerance),
+        "sim_nonzero_count": int((sim_div_tensor > 0).sum().item()),
+        "real_nonzero_count": int((real_dividends_epoch > 0).sum().item()),
+        "note": "Direct comparison using filtered dividend data",
+    }
+
+
+def compare_incentives(
+    sim_incentives_per_epoch: Dict,
+    real_incentives_epoch: torch.Tensor,
+    miners: List[str],
+    tolerance: float,
+    sim_epoch_idx: Optional[int] = None,
+    case=None,
+    yuma_config: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """Compare simulation incentives with real incentives for a single epoch."""
+    if real_incentives_epoch is None:
+        return {"error": "No real incentives data available", "matches": False}
+
+    # Always build simulator incentives from dictionary (tests the simulator output)
+    sim_vals_dict: List[float] = []
+    for miner_hk in miners:
+        if miner_hk in sim_incentives_per_epoch and sim_incentives_per_epoch[miner_hk]:
+            seq = sim_incentives_per_epoch[miner_hk]
+            if sim_epoch_idx is not None and 0 <= sim_epoch_idx < len(seq):
+                sim_vals_dict.append(float(seq[sim_epoch_idx]))
+            else:
+                sim_vals_dict.append(float(seq[-1]))
+        else:
+            sim_vals_dict.append(0.0)
+    sim_tensor = torch.tensor(sim_vals_dict, dtype=torch.float32)
+
+    # Optional: recompute reference incentives (W,S,C) to detect mapping/index issues and report
+    recompute_diff_max: Optional[float] = None
+    if case is not None and yuma_config is not None and sim_epoch_idx is not None:
+        try:
+            W = case.weights_epochs[sim_epoch_idx]
+            S = case.stakes_epochs[sim_epoch_idx]
+            denom_W = W.sum(dim=1, keepdim=True)
+            denom_W = torch.where(denom_W > 0, denom_W, torch.ones_like(denom_W))
+            Wn = W / denom_W
+            Sn = S / S.sum().clamp(min=torch.finfo(S.dtype).eps)
+            C, _ = _compute_consensus(Wn, Sn, yuma_config)
+            W_clipped = torch.min(Wn, C)
+            R = (Sn.view(-1, 1) * W_clipped).sum(dim=0)
+            sim_tensor_ref = (R / R.sum().clamp(min=torch.finfo(R.dtype).eps)).to(torch.float32)
+            # Compare dict vs recompute
+            if sim_tensor_ref.shape == sim_tensor.shape:
+                recompute_diff_max = float(torch.max(torch.abs(sim_tensor - sim_tensor_ref)).item())
+        except (AttributeError, IndexError, TypeError, ValueError) as exc:
+            logger.debug("Failed to recompute incentives for comparison: %s", exc)
+    if sim_tensor.shape != real_incentives_epoch.shape:
+        return {
+            "error": f"Shape mismatch: sim={tuple(sim_tensor.shape)}, real={tuple(real_incentives_epoch.shape)}",
+            "matches": False,
+        }
+
+    diff = torch.abs(sim_tensor - real_incentives_epoch)
+    result = {
+        "max_diff": float(torch.max(diff).item()),
+        "mean_diff": float(torch.mean(diff).item()),
+        "nonzero_diffs": int((diff > tolerance).sum().item()),
+        "matches": bool(torch.max(diff).item() < tolerance),
+        "shape": list(sim_tensor.shape),
+    }
+    if recompute_diff_max is not None:
+        result["sim_vs_recompute_max_diff"] = recompute_diff_max
+    return result

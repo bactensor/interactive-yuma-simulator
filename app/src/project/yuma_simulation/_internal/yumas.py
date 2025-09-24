@@ -1,4 +1,3 @@
-import math
 import os
 import dataclasses
 from dataclasses import asdict, dataclass, field
@@ -6,6 +5,9 @@ from typing import Optional, Dict, Union
 from typing import Literal
 
 import torch
+import logging
+
+logger = logging.getLogger(__name__)
 
 liquid_alpha_mode_map = {
     "CURRENT": lambda C, C_old: C,
@@ -116,7 +118,10 @@ def optimized_compute_consensus_weights(W: torch.Tensor, S: torch.Tensor, config
 
 
 def binary_search_compute_consensus_weights(W: torch.Tensor, S: torch.Tensor, config) -> torch.Tensor:
-    C = torch.zeros(W.shape[1])
+    """
+    Binary search to find consensus weights. Legacy method for compatibility.
+    """
+    C = torch.zeros(W.shape[1], dtype=W.dtype, device=W.device)
 
     for i, miner_weight in enumerate(W.T):
         c_high = 1.0
@@ -133,12 +138,99 @@ def binary_search_compute_consensus_weights(W: torch.Tensor, S: torch.Tensor, co
         C[i] = c_high
     return C
 
+def rust_parity_compute_consensus_weights(W: torch.Tensor, S: torch.Tensor, config) -> torch.Tensor:
+    """
+    Rust-parity consensus via stake-weighted median with majority (kappa).
 
-if os.environ.get('LEGACY_CONSENSUS') == '1':
+    Faithful port of weighted_median_col_sparse from pallets/subtensor/src/epoch/math.rs
+    """
+    V, Scols = W.shape
+    device = W.device
+    dtype = W.dtype
+
+    active_mask = S > 0
+    if not active_mask.any():
+        return torch.zeros(Scols, dtype=dtype, device=device)
+    S_use = S[active_mask].to(dtype)
+    W_use = W[active_mask, :].to(dtype)
+    S_use = S_use / S_use.sum().clamp(min=torch.finfo(S_use.dtype).eps)
+    minority = 1.0 - float(config.kappa)
+
+    def wm(score_col: torch.Tensor, stake_vec: torch.Tensor) -> torch.Tensor:
+        n = stake_vec.numel()
+        if n == 0:
+            return torch.tensor(0.0, dtype=dtype, device=device)
+        if n == 1:
+            return score_col[0]
+        idx = torch.arange(n, device=device)
+        part_lo = 0.0
+        part_hi = float(stake_vec.sum().item())
+        cur = idx
+        while True:
+            m = cur.numel()
+            if m == 0:
+                return torch.tensor(0.0, dtype=dtype, device=device)
+            if m == 1:
+                return score_col[cur[0]]
+            mid = m // 2
+            pivot = score_col[cur[mid]]
+            lower_mask = score_col[cur] < pivot
+            upper_mask = score_col[cur] > pivot
+            lo_stake = float(stake_vec[cur][lower_mask].sum().item())
+            hi_stake = float(stake_vec[cur][upper_mask].sum().item())
+            if (part_lo + lo_stake) <= minority and minority < (part_hi - hi_stake):
+                return pivot
+            if minority < (part_lo + lo_stake) and lower_mask.any():
+                part_hi = part_lo + lo_stake
+                cur = cur[lower_mask]
+                continue
+            if (part_hi - hi_stake) <= minority and upper_mask.any():
+                part_lo = part_hi - hi_stake
+                cur = cur[upper_mask]
+                continue
+            return pivot
+
+    Cs = []
+    for j in range(Scols):
+        Cs.append(wm(W_use[:, j], S_use))
+    return torch.stack(Cs)
+
+# Simple consensus configuration
+CONSENSUS_MODE = os.environ.get('CONSENSUS_MODE', 'rust_parity')  # legacy, optimized, rust_parity
+QUANTIZATION_ENABLED = os.environ.get('QUANTIZATION_ENABLED', '0') == '1'
+U16_MAX_FLOAT = 65_535.0
+
+# Select consensus function
+if CONSENSUS_MODE == 'legacy':
     compute_consensus_weights = binary_search_compute_consensus_weights
-else:
+elif CONSENSUS_MODE == 'optimized':
     compute_consensus_weights = optimized_compute_consensus_weights
+else:  # default to rust_parity
+    compute_consensus_weights = rust_parity_compute_consensus_weights
 
+def _quantize_consensus(C: torch.Tensor) -> torch.Tensor:
+    """Optionally quantize consensus thresholds to 16-bit grid."""
+    if not (torch.isfinite(C).all() and C.numel() > 0):
+        return C
+    # Floor to 16-bit grid
+    scaled = C.clamp(min=0.0, max=1.0) * 65_535
+    Cq = torch.floor(scaled) / 65_535
+    zeroed = ((C > 0) & (Cq == 0)).sum().item()
+    if zeroed:
+        logger.debug("Consensus flooring zeroed %d positive entries", int(zeroed))
+    return Cq
+
+
+def _compute_consensus(
+    W: torch.Tensor, S: torch.Tensor, config: YumaConfig
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Unified consensus computation with optional quantization."""
+    # Compute consensus using selected method
+    C = compute_consensus_weights(W, S, config)
+    C_pre = C.clone()
+    if QUANTIZATION_ENABLED:
+        C = _quantize_consensus(C)
+    return C, C_pre
 
 def compute_incentive(R: torch.Tensor, config: YumaConfig):
     if not config.winner_takes_all:
@@ -170,6 +262,14 @@ def YumaSubtensorOld(
     Legacy Subtensor Yuma function.
     """
 
+    # Promote to float64 for numerical stability
+    W = W.to(torch.float64)
+    S = S.to(torch.float64)
+    if B_old is not None:
+        B_old = B_old.to(torch.float64)
+    if C_old is not None:
+        C_old = C_old.to(torch.float64)
+
     # === Weight ===
     W = (W.T / (W.sum(dim=1) + 1e-6)).T
 
@@ -179,9 +279,8 @@ def YumaSubtensorOld(
     # === Prerank ===
     P = (S.view(-1, 1) * W).sum(dim=0)
 
-    C = compute_consensus_weights(W, S, config)
-
-    C = (C / C.sum() * 65_535).int() / 65_535
+    # === Consensus === (unified helper, chain-like by default)
+    C, _ = _compute_consensus(W, S, config)
 
     # === Consensus clipped weight ===
     W_clipped = torch.min(W, C)
@@ -201,7 +300,7 @@ def YumaSubtensorOld(
     W_b = (1 - config.bond_penalty) * W + config.bond_penalty * W_clipped
     B = S.view(-1, 1) * W_b
     B_sum = B.sum(dim=0)
-    B = B / (B_sum + 1e-6)
+    B = B / (B_sum + 1e-9)
     B = torch.nan_to_num(B)
 
     a = b = torch.tensor(float("nan"))
@@ -226,12 +325,27 @@ def YumaSubtensorOld(
         B_ema = B.clone()
 
     B_ema_sum = B_ema.sum(dim=0)
-    B_ema = B_ema / (B_ema_sum + 1e-6)
+    B_ema = B_ema / (B_ema_sum + 1e-9)
     B_ema = torch.nan_to_num(B_ema)
+    B_ema_normalized = B_ema.clone()
+
+    # Mimic pallet storage quantization: column max-upscale then u16 floor.
+    col_max = B_ema_normalized.max(dim=0, keepdim=True).values
+    scale = torch.where(col_max > 0, 1.0 / col_max, torch.zeros_like(col_max))
+    B_upscaled = torch.nan_to_num(B_ema_normalized * scale)
+    B_storage = torch.floor(B_upscaled.clamp(min=0.0, max=1.0) * U16_MAX_FLOAT + 1e-9)
+
+    # When bonds are read next epoch they are column-normalized again.
+    B_storage_sum = B_storage.sum(dim=0, keepdim=True)
+    B_storage_norm = torch.where(
+        B_storage_sum > 0,
+        B_storage / B_storage_sum,
+        torch.zeros_like(B_storage),
+    )
 
     # === Dividend Calculation===
-    D = (B_ema * I).sum(dim=1)
-    D_normalized = D / (D.sum() + 1e-6)
+    D = (B_ema_normalized * I).sum(dim=1)
+    D_normalized = D / D.sum().clamp(min=torch.finfo(D.dtype).eps)
 
     return {
         "weight": W,
@@ -244,7 +358,9 @@ def YumaSubtensorOld(
         "server_trust": T,
         "validator_trust": T_v,
         "validator_bond": B,
-        "validator_ema_bond": B_ema,
+        "validator_ema_bond": B_ema_normalized.to(torch.float64),
+        "validator_ema_bond_storage": B_storage.to(torch.float64),
+        "validator_ema_bond_post_read": B_storage_norm.to(torch.float64),
         "validator_reward": D,
         "validator_reward_normalized": D_normalized,
         "alpha": alpha,
@@ -267,8 +383,18 @@ def YumaSubtensor(
     Currently implemented Subtensor Yuma function.
     """
 
+    # Promote to float64 for numerical stability
+    W = W.to(torch.float64)
+    S = S.to(torch.float64)
+    if B_old is not None:
+        B_old = B_old.to(torch.float64)
+    if C_old is not None:
+        C_old = C_old.to(torch.float64)
+
     # === Weight ===
-    W = (W.T / (W.sum(dim=1) + 1e-6)).T
+    denom_W = W.sum(dim=1, keepdim=True)
+    denom_W = torch.where(denom_W > 0, denom_W, torch.ones_like(denom_W))
+    W = W / denom_W
 
     # === Stake ===
     S = S / S.sum()
@@ -276,10 +402,8 @@ def YumaSubtensor(
     # === Prerank ===
     P = (S.view(-1, 1) * W).sum(dim=0)
 
-    # === Consensus ===
-    C = compute_consensus_weights(W, S, config)
-
-    C = (C / C.sum() * 65_535).int() / 65_535
+    # === Consensus === (unified helper, chain-like by default)
+    C, _ = _compute_consensus(W, S, config)
 
     # === Consensus clipped weight ===
     W_clipped = torch.min(W, C)
@@ -298,10 +422,11 @@ def YumaSubtensor(
     W_b = (1 - config.bond_penalty) * W + config.bond_penalty * W_clipped
     B = S.view(-1, 1) * W_b
     B_sum = B.sum(dim=0)
-    B = B / (B_sum + 1e-6)
-    B = torch.nan_to_num(B)
+    B_sum = torch.where(B_sum > 0, B_sum, torch.ones_like(B_sum))
+    B = B / B_sum
+    B = torch.nan_to_num(B, nan=0.0, posinf=0.0, neginf=0.0)
 
-    a = b = torch.tensor(float("nan"))
+    a = b = torch.tensor(float("nan"), dtype=W.dtype, device=W.device)
     alpha = 1 - config.bond_moving_avg
     if config.liquid_alpha and (C_old is not None):
         from .simulation_utils import _compute_liquid_alpha
@@ -318,18 +443,33 @@ def YumaSubtensor(
         )
     if B_old is not None:
         B_old_sum = B_old.sum(dim=0)
-        B_old = B_old/(B_old_sum + 1e-6)
+        B_old = B_old/(B_old_sum + 1e-9)
         B_ema = alpha * B + (1 - alpha) * B_old
     else:
         B_ema = B.clone()
 
     B_ema_sum = B_ema.sum(dim=0)
-    B_ema = B_ema / (B_ema_sum + 1e-6)
+    B_ema = B_ema / (B_ema_sum + 1e-9)
     B_ema = torch.nan_to_num(B_ema)
+    B_ema_normalized = B_ema.clone()
+
+    # Mimic pallet storage quantization: column max-upscale then u16 floor.
+    col_max = B_ema_normalized.max(dim=0, keepdim=True).values
+    scale = torch.where(col_max > 0, 1.0 / col_max, torch.zeros_like(col_max))
+    B_upscaled = torch.nan_to_num(B_ema_normalized * scale)
+    B_storage = torch.floor(B_upscaled.clamp(min=0.0, max=1.0) * U16_MAX_FLOAT + 1e-9)
+
+    B_storage_sum = B_storage.sum(dim=0, keepdim=True)
+    B_storage_norm = torch.where(
+        B_storage_sum > 0,
+        B_storage / B_storage_sum,
+        torch.zeros_like(B_storage),
+    )
 
     # === Dividend Calculation===
-    D = (B_ema * I).sum(dim=1)
-    D_normalized = D / (D.sum() + 1e-6)
+    D = (B_ema_normalized * I).sum(dim=1)
+    D_normalized = D / D.sum().clamp(min=torch.finfo(D.dtype).eps)
+
 
     return {
         "weight": W,
@@ -342,7 +482,9 @@ def YumaSubtensor(
         "server_trust": T,
         "validator_trust": T_v,
         "validator_bond": B,
-        "validator_ema_bond": B_ema,
+        "validator_ema_bond": B_ema_normalized.to(torch.float64),
+        "validator_ema_bond_storage": B_storage.to(torch.float64),
+        "validator_ema_bond_post_read": B_storage_norm.to(torch.float64),
         "validator_reward": D,
         "validator_reward_normalized": D_normalized,
         "bond_alpha": alpha,
@@ -366,18 +508,27 @@ def Yuma(
     https://github.com/opentensor/subtensor/blob/main/docs/consensus.md#consensus-policy
     """
 
+    # Promote to float64 for numerical stability
+    W = W.to(torch.float64)
+    S = S.to(torch.float64)
+    if B_old is not None:
+        B_old = B_old.to(torch.float64)
+    if C_old is not None:
+        C_old = C_old.to(torch.float64)
+
     # === Weight ===
-    W = (W.T / (W.sum(dim=1) + 1e-6)).T
+    denom_W = W.sum(dim=1, keepdim=True)
+    denom_W = torch.where(denom_W > 0, denom_W, torch.ones_like(denom_W))
+    W = W / denom_W
 
     # === Stake ===
-    S = S / S.sum()
+    S = S / S.sum().clamp(min=torch.finfo(S.dtype).eps)
 
     # === Prerank ===
     P = (S.view(-1, 1) * W).sum(dim=0)
 
-    C = compute_consensus_weights(W, S, config)
-
-    C = (C / C.sum() * 65_535).int() / 65_535
+    # === Consensus === (unified helper, chain-like by default)
+    C, _ = _compute_consensus(W, S, config)
 
     # === Consensus clipped weight ===
     W_clipped = torch.min(W, C)
@@ -396,10 +547,11 @@ def Yuma(
     W_b = (1 - config.bond_penalty) * W + config.bond_penalty * W_clipped
     B = S.view(-1, 1) * W_b
     B_sum = B.sum(dim=0)
-    B = B / (B_sum + 1e-6)
-    B = torch.nan_to_num(B)
+    B_sum = torch.where(B_sum > 0, B_sum, torch.ones_like(B_sum))
+    B = B / B_sum
+    B = torch.nan_to_num(B, nan=0.0, posinf=0.0, neginf=0.0)
 
-    a = b = torch.tensor(float("nan"))
+    a = b = torch.tensor(float("nan"), dtype=W.dtype, device=W.device)
     alpha = 1 - config.bond_moving_avg
     if config.liquid_alpha and (C_old is not None):
         from .simulation_utils import _compute_liquid_alpha
@@ -422,7 +574,7 @@ def Yuma(
 
     # === Dividend ===
     D = (B_ema * I).sum(dim=1)
-    D_normalized = D / (D.sum() + 1e-6)
+    D_normalized = D / D.sum().clamp(min=torch.finfo(D.dtype).eps)
 
     return {
         "weight": W,
@@ -461,21 +613,32 @@ def Yuma2b(
     The Bonds from the previous epoch are used to calculate Bonds EMA.
     """
 
+    # Promote to float64 for numerical stability
+    W = W.to(torch.float64)
+    S = S.to(torch.float64)
+    if W_prev is not None:
+        W_prev = W_prev.to(torch.float64)
+    if B_old is not None:
+        B_old = B_old.to(torch.float64)
+    if C_old is not None:
+        C_old = C_old.to(torch.float64)
+
     # === Weight ===
-    W = (W.T / (W.sum(dim=1) + 1e-6)).T
+    denom_W = W.sum(dim=1, keepdim=True)
+    denom_W = torch.where(denom_W > 0, denom_W, torch.ones_like(denom_W))
+    W = W / denom_W
 
     if W_prev is None:
         W_prev = W
 
     # === Stake ===
-    S = S / S.sum()
+    S = S / S.sum().clamp(min=torch.finfo(S.dtype).eps)
 
     # === Prerank ===
     P = (S.view(-1, 1) * W).sum(dim=0)
 
-    C = compute_consensus_weights(W, S, config)
-
-    C = (C / C.sum() * 65_535).int() / 65_535
+    # === Consensus === (unified helper, chain-like by default)
+    C, _ = _compute_consensus(W, S, config)
 
     # === Consensus clipped weight ===
     W_clipped = torch.min(W_prev, C)
@@ -492,10 +655,12 @@ def Yuma2b(
 
     # === Bonds ===
     W_b = (1 - config.bond_penalty) * W_prev + config.bond_penalty * W_clipped
-    B = S.view(-1, 1) * W_b / (S.view(-1, 1) * W_b).sum(dim=0)
-    B = B.nan_to_num(0)
+    denom_B = (S.view(-1, 1) * W_b).sum(dim=0)
+    denom_B = torch.where(denom_B > 0, denom_B, torch.ones_like(denom_B))
+    B = (S.view(-1, 1) * W_b) / denom_B
+    B = B.nan_to_num(0.0)
 
-    a = b = torch.tensor(float("nan"))
+    a = b = torch.tensor(float("nan"), dtype=W.dtype, device=W.device)
     alpha = 1 - config.bond_moving_avg
     if config.liquid_alpha and (C_old is not None):
         from .simulation_utils import _compute_liquid_alpha
@@ -518,7 +683,7 @@ def Yuma2b(
 
     # === Dividend ===
     D = (B_ema * I).sum(dim=1)
-    D_normalized = D / (D.sum() + 1e-6)
+    D_normalized = D / D.sum().clamp(min=torch.finfo(D.dtype).eps)
 
     return {
         "weight": W,
@@ -572,18 +737,25 @@ def Yuma2c(
     - A decay mechanism ensures that bonds associated with unsupported servers decrease over time.
     """
 
+    # Promote to float64 for numerical stability
+    W = W.to(torch.float64)
+    S = S.to(torch.float64)
+    if B_old is not None:
+        B_old = B_old.to(torch.float64)
+
     # === Weight ===
-    W = (W.T / (W.sum(dim=1) + 1e-6)).T
+    denom_W = W.sum(dim=1, keepdim=True)
+    denom_W = torch.where(denom_W > 0, denom_W, torch.ones_like(denom_W))
+    W = W / denom_W
 
     # === Stake ===
-    S = S / S.sum()
+    S = S / S.sum().clamp(min=torch.finfo(S.dtype).eps)
 
     # === Prerank ===
     P = (S.view(-1, 1) * W).sum(dim=0)
 
-    C = compute_consensus_weights(W, S, config)
-
-    C = (C / C.sum() * 65_535).int() / 65_535
+    # === Consensus === (unified helper, chain-like by default)
+    C, _ = _compute_consensus(W, S, config)
 
     # === Consensus clipped weight ===
     W_clipped = torch.min(W, C)
@@ -621,13 +793,15 @@ def Yuma2c(
     B = decay * B_old + purchase
     B = torch.min(B, capacity_per_bond)  # Enforce capacity constraints
 
-    B_norm = B / (B.sum(dim=0, keepdim=True) + 1e-6)
+    denom_Bcol = B.sum(dim=0, keepdim=True)
+    denom_Bcol = torch.where(denom_Bcol > 0, denom_Bcol, torch.ones_like(denom_Bcol))
+    B_norm = B / denom_Bcol
 
     # === Dividends Calculation ===
     D = (B_norm * I).sum(dim=1)
 
     # Normalize dividends
-    D_normalized = D / (D.sum() + 1e-6)
+    D_normalized = D / D.sum().clamp(min=torch.finfo(D.dtype).eps)
 
     return {
         "weight": W,
@@ -676,18 +850,27 @@ def Yuma3(
     - The `liquid_alpha` adjustment, when enabled, dynamically adapts bond accumulation based on the consensus range of server weights, providing a more responsive and adaptive allocation mechanism.
     """
 
+    # Promote to float64 for numerical stability
+    W = W.to(torch.float64)
+    S = S.to(torch.float64)
+    if B_old is not None:
+        B_old = B_old.to(torch.float64)
+    if C_old is not None:
+        C_old = C_old.to(torch.float64)
+
     # === Weight ===
-    W = (W.T / (W.sum(dim=1) + 1e-6)).T
+    denom_W = W.sum(dim=1, keepdim=True)
+    denom_W = torch.where(denom_W > 0, denom_W, torch.ones_like(denom_W))
+    W = W / denom_W
 
     # === Stake ===
-    S = S / S.sum()
+    S = S / S.sum().clamp(min=torch.finfo(S.dtype).eps)
 
     # === Prerank ===
     P = (S.view(-1, 1) * W).sum(dim=0)
 
-    C = compute_consensus_weights(W, S, config)
-
-    C = (C / C.sum() * 65_535).int() / 65_535
+    # === Consensus === (unified helper, chain-like by default)
+    C, _ = _compute_consensus(W, S, config)
 
     # === Consensus clipped weight ===
     W_clipped = torch.min(W, C)
@@ -750,12 +933,14 @@ def Yuma3(
     B = torch.clamp(B, max=1.0)
 
     # === Dividends Calculation ===
-    B_norm = B / (B.sum(dim=0, keepdim=True) + 1e-6) # Normalized Bonds only for Dividends calculations purpose
+    denom_Bcol = B.sum(dim=0, keepdim=True)
+    denom_Bcol = torch.where(denom_Bcol > 0, denom_Bcol, torch.ones_like(denom_Bcol))
+    B_norm = B / denom_Bcol  # Normalized Bonds only for Dividends calculations purpose
     total_bonds_per_validator = (B_norm * I).sum(dim=1)  # Sum over miners for each validator
     D = S * total_bonds_per_validator  # Element-wise multiplication
 
     # Normalize dividends
-    D_normalized = D / (D.sum() + 1e-6)
+    D_normalized = D / D.sum().clamp(min=torch.finfo(D.dtype).eps)
 
     return {
         "weight": W,
@@ -768,4 +953,5 @@ def Yuma3(
         "validator_bonds": B,
         "validator_reward": D,
         "validator_reward_normalized": D_normalized,
+    
     }

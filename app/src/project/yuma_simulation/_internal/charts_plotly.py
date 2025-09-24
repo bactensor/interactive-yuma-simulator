@@ -548,12 +548,11 @@ def plot_relative_dividends_plotly(
     case_name: str,
     case: BaseCase,
     num_epochs: int,
-    epochs_padding: int = 0,
     **kwargs,
 ) -> str:
 
     data = _prepare_relative_dividends_data(
-        validators_relative_dividends, case, num_epochs, epochs_padding
+        validators_relative_dividends, case, num_epochs
     )
 
     description, _, formula_text = _get_relative_dividends_description_and_formula()
@@ -582,12 +581,11 @@ def plot_bonds_metagraph_dynamic_plotly(
     case_name: str,
     normalize: bool = False,
     legend_validators: list[str] | None = None,
-    epochs_padding: int = 0,
     **kwargs,
 ) -> str:
 
     raw_data = _prepare_bonds_metagraph_data(
-        case, bonds_per_epoch, default_miners, normalize, epochs_padding
+        case, bonds_per_epoch, default_miners, normalize
     )
 
     description, ylabel, title_suffix = _get_bonds_description_and_labels(normalize)
@@ -619,11 +617,10 @@ def plot_validator_server_weights_subplots_dynamic_plotly(
     case: MetagraphCase,
     default_miners: list[str],
     case_name: str,
-    epochs_padding: int = 0,
     **kwargs,
 ) -> str:
 
-    raw_data = _prepare_validator_server_weights_subplots_dynamic_data(case, default_miners, epochs_padding)
+    raw_data = _prepare_validator_server_weights_subplots_dynamic_data(case, default_miners)
     description = _get_validator_weights_description()
 
     # Adapt data using common function with ugly key parametrization
@@ -655,7 +652,6 @@ def plot_validator_server_weights_subplots_plotly(
     servers: list[str],
     num_epochs: int,
     case_name: str,
-    epochs_padding: int = 0,
     **kwargs,
 ) -> str:
     """
@@ -664,7 +660,7 @@ def plot_validator_server_weights_subplots_plotly(
     they allocate to that server from epoch 0..num_epochs-1.
     """
     raw_data = _prepare_validator_server_weights_subplots_data(
-        validators, weights_epochs, servers, num_epochs, epochs_padding
+        validators, weights_epochs, servers, num_epochs
     )
 
     # Adapt data for subplot grid factory
