@@ -1,18 +1,18 @@
-#!/usr/bin/env python3
 """
-Thin CLI wrapper for the modular simulator validation package.
+Thin CLI wrapper for the simulator validation package.
 
-This script preserves the original entrypoint while delegating all logic to
+This script is an entrypoint for the integration test while delegating all logic to
 `project.simulator_validation` modules.
 """
 
 import os
 import sys
 import logging
+import argparse
+import traceback
 from datetime import datetime, timedelta
 from typing import Any, Dict, List
 
-# Ensure Django app path is available
 sys.path.insert(0, '/root/repos/interactive-yuma-simulator/app/src')
 
 import django
@@ -33,7 +33,6 @@ from project.simulator_validation.hyperparams import (
 
 
 def main() -> int:
-    import argparse
     parser = argparse.ArgumentParser(description='Validate Yuma simulator against real metagraph data')
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('--netuid', type=int, help='Single subnet ID to validate')
@@ -106,13 +105,18 @@ def main() -> int:
         for nuid in subnet_ids:
             logger.info(f"\n{'='*60}\nVALIDATING SUBNET {nuid}\n{'='*60}")
             try:
+                hyperparams_entry = all_hparams.get(nuid)
+                if not hyperparams_entry:
+                    raise ValueError(
+                        f"No hyperparameters payload available for subnet {nuid}."
+                    )
                 result = validate_simulator(
                     netuid=nuid,
                     tolerance=args.tolerance,
                     num_epochs=args.num_epochs,
                     generate_diagnostics=not args.no_diagnostics,
                     bond_penalty_override=args.bond_penalty_override,
-                    hyperparams_data=all_hparams.get(nuid),
+                    hyperparams_data=hyperparams_entry,
                     start_date=start_date,
                     end_date=end_date,
                     start_block=args.start_block,
@@ -128,7 +132,7 @@ def main() -> int:
                     all_success = False
             except Exception as e:
                 logger.error(f"Validation failed for subnet {nuid}: {e}")
-                import traceback; traceback.print_exc()
+                traceback.print_exc()
                 all_results[nuid] = {'error': str(e), 'success': False}
                 all_success = False
 
@@ -153,7 +157,7 @@ def main() -> int:
         return 0 if all_success else 1
     except Exception as e:
         logger.error(f"Validation failed with error: {e}")
-        import traceback; traceback.print_exc()
+        traceback.print_exc()
         return 2
 
 

@@ -1,8 +1,12 @@
 import logging
 from datetime import datetime, timedelta
-from typing import Tuple, List, Optional
+from typing import List, Optional
 
-from project.core.utils import fetch_metagraph_weights_stakes, fetch_metagraph_rewards
+from project.core.utils import (
+    fetch_metagraph_weights_stakes,
+    fetch_metagraph_rewards,
+    EpochStartNotFoundError,
+)
 from project.yuma_simulation._internal.cases import MetagraphCase
 
 logger = logging.getLogger(__name__)
@@ -42,11 +46,14 @@ def prepare_metagraph_data(
         last_err: Exception | None = None
         chosen_start_date = start_date
         weights_stakes_data = None
+        attempted_windows: List[str] = []
+
         for bh in backoff_hours:
+            attempt_start_date = (
+                (start_date - timedelta(hours=bh)) if start_date is not None else None
+            )
+            attempted_windows.append(f"start={attempt_start_date} (backoff {bh}h)")
             try:
-                attempt_start_date = (
-                    (start_date - timedelta(hours=bh)) if start_date is not None else None
-                )
                 chosen_start_date = attempt_start_date
                 weights_stakes_data = fetch_metagraph_weights_stakes(
                     netuid=netuid,
@@ -56,19 +63,22 @@ def prepare_metagraph_data(
                     end_block=use_end_block,
                     num_epochs=num_epochs,
                 )
+                last_err = None
                 break
-            except Exception as e:
-                msg = str(e).lower()
-                # Normalize message and retry on any variant of epoch-start wording
-                import re as _re
-                msg_norm = _re.sub(r"[^a-z]+", " ", msg)
-                if "epoch start" in msg_norm:
-                    logger.warning(
-                        f"No epoch-start blocks found from start={attempt_start_date}; retrying with additional backoff {bh}h"
-                    )
-                    last_err = e
-                    continue
-                last_err = e
+            except EpochStartNotFoundError as exc:
+                last_err = exc
+                logger.warning(
+                    "No epoch-start blocks found for %s; retrying with next backoff window",
+                    attempted_windows[-1],
+                )
+                continue
+            except Exception as exc:
+                last_err = exc
+                logger.error(
+                    "Metagraph fetch failed for %s: %s",
+                    attempted_windows[-1],
+                    exc,
+                )
                 break
         if weights_stakes_data is None:
             assert last_err is not None
@@ -90,11 +100,23 @@ def prepare_metagraph_data(
                     )
                     # Use the broad_start as the chosen window start for rewards alignment
                     chosen_start_date = broad_start
-                except Exception:
+                    last_err = None
+                except Exception as fallback_exc:
+                    logger.error(
+                        "Broad window fetch failed (start=%s, end=%s): %s",
+                        broad_start,
+                        original_end_date,
+                        fallback_exc,
+                    )
                     raise last_err
             else:
                 # If using block-based parameters, don't attempt date-based fallback
-                logger.error(f"Failed to fetch data with blocks {start_block}-{end_block}")
+                logger.error(
+                    "Failed to fetch data with blocks %s-%s; attempts tried: %s",
+                    start_block,
+                    end_block,
+                    ", ".join(attempted_windows),
+                )
                 raise last_err
         blocks = weights_stakes_data.get("blocks", [])
         desired_epochs = num_epochs

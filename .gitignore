@@ -18,3 +18,4 @@ media/
 .terraform/
 .nox/
 __pycache__
+/validation_artifacts/*

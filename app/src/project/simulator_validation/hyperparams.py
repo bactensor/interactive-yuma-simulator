@@ -64,33 +64,39 @@ def normalize_hyperparameters(raw_params: Dict[str, Any]) -> Dict[str, Any]:
     normalized["bond_penalty"] = bond_penalty
 
     # Optional: commit–reveal controls (names vary by source)
-    try:
-        cr_enabled = raw_params.get("commit_reveal_weights_enabled")
-        if cr_enabled is None:
-            cr_enabled = raw_params.get("commit_reveal_enabled")
-        normalized["commit_reveal_enabled"] = bool(cr_enabled) if cr_enabled is not None else False
-    except Exception:
-        normalized["commit_reveal_enabled"] = False
-
-    try:
-        # Try common keys for the period (epochs)
-        period = (
-            raw_params.get("reveal_period_epochs")
-            or raw_params.get("commit_reveal_period")
-            or raw_params.get("commit_reveal_interval")
+    if "commit_reveal_weights_enabled" in raw_params:
+        cr_enabled_raw = raw_params["commit_reveal_weights_enabled"]
+    else:
+        cr_enabled_raw = raw_params.get("commit_reveal_enabled")
+    if cr_enabled_raw is None:
+        raise KeyError(
+            "Missing required hyperparameter: commit_reveal_enabled"
         )
-        normalized["commit_reveal_period_epochs"] = int(period) if period is not None else 0
-    except Exception:
-        normalized["commit_reveal_period_epochs"] = 0
+    normalized["commit_reveal_enabled"] = bool(cr_enabled_raw)
 
-    # Bond reset behavior for hotkey swaps
+    # Try common keys for the period (epochs)
+    period = (
+        raw_params.get("reveal_period_epochs")
+        or raw_params.get("commit_reveal_period")
+        or raw_params.get("commit_reveal_interval")
+    )
     try:
-        bonds_reset = raw_params.get("bonds_reset_enabled")
-        if bonds_reset is None:
-            bonds_reset = raw_params.get("reset_bonds_enabled")
-        normalized["bonds_reset_enabled"] = bool(bonds_reset) if bonds_reset is not None else False
-    except Exception:
-        normalized["bonds_reset_enabled"] = False
+        normalized["commit_reveal_period_epochs"] = int(period) if period is not None else 0
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Invalid commit_reveal period value: {period!r}"
+        ) from exc
+
+    # Bond reset behavior for hotkey swaps (required)
+    if "bonds_reset_enabled" in raw_params:
+        bonds_reset_raw = raw_params["bonds_reset_enabled"]
+    else:
+        bonds_reset_raw = raw_params.get("reset_bonds_enabled")
+    if bonds_reset_raw is None:
+        # TODO: add bonds_reset_enabled to hyperparameter service responses.
+        logger.warning("bonds_reset_enabled missing from hyperparams; defaulting to False")
+        bonds_reset_raw = False
+    normalized["bonds_reset_enabled"] = bool(bonds_reset_raw)
 
     return normalized
 
@@ -186,19 +192,16 @@ def setup_yuma_configuration(
     hyperparams_data: Optional[Dict[str, Any]] = None,
 ) -> Tuple[YumaConfig, bool, Dict[str, Any]]:
     """
-    Fetch subnet hyperparams and build YumaConfig; returns (config, is_yuma3_on).
+    Build YumaConfig from provided hyperparameter payload; returns (config, is_yuma3_on, cr_info).
     Raises ValueError when hyperparams are missing or invalid.
     """
-    from .hyperparams import fetch_subnet_hyperparameters  # local import for clarity
-
-    # Allow caller to inject already-fetched hyperparams (e.g., from multi-subnet endpoint)
     if hyperparams_data is None:
-        hyperparams_data = fetch_subnet_hyperparameters(netuid)
-    else:
-        logger.info(f"Using injected hyperparameters for subnet {netuid} (skipping HTTP fetch)")
-    if not hyperparams_data or "hyperparams" not in hyperparams_data:
         raise ValueError(
-            f"Failed to fetch hyperparameters for subnet {netuid}. Cannot proceed with validation."
+            f"Hyperparameters data must be provided for subnet {netuid}."
+        )
+    if "hyperparams" not in hyperparams_data:
+        raise ValueError(
+            f"Hyperparameters payload for subnet {netuid} is missing 'hyperparams' field."
         )
 
     raw_hyperparams = hyperparams_data["hyperparams"]
@@ -229,8 +232,9 @@ def setup_yuma_configuration(
             ),
         )
         cr_info = {
-            "commit_reveal_enabled": params.get("commit_reveal_enabled", False),
+            "commit_reveal_enabled": params["commit_reveal_enabled"],
             "commit_reveal_period_epochs": params.get("commit_reveal_period_epochs", 0),
+            "bonds_reset_enabled": params["bonds_reset_enabled"],
         }
         return yuma_config, is_yuma3_on, cr_info
     except KeyError as e:

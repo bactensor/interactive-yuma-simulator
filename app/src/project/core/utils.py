@@ -16,6 +16,10 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 
+class EpochStartNotFoundError(requests.HTTPError):
+    """Raised when backend reports missing epoch-start blocks in the requested window."""
+
+
 # TODO: refactor yuma-simulation package to accept hyperparameter values natively
 def normalize(value: float, max_value: float) -> float:
     """Normalize a value to the [0,1] range based on a given maximum hyperparameter value."""
@@ -163,6 +167,12 @@ def fetch_metagraph_weights_stakes(
             f"HTTP {r.status_code} {r.reason} for {url} with params={params}. "
             f"Details: {err or (body[:200] if body else 'no body')}"
         )
+
+        if err:
+            err_lower = str(err).lower()
+            if "epoch" in err_lower and "start" in err_lower:
+                raise EpochStartNotFoundError(msg, response=r)
+
         raise requests.HTTPError(msg, response=r)
 
     return r.json()

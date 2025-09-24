@@ -4,10 +4,6 @@ from project.yuma_simulation._internal.yumas import _compute_consensus
 
 import torch
 
-# Toggle to use active-miner column filtering. Default off per current experiments.
-# TODO Must be investigated if active miner filter is needed.
-USE_ACTIVE_MINER_FILTER: bool = False
-
 
 def _filter_real_bonds_simple(
     *,
@@ -32,7 +28,7 @@ def _filter_real_bonds_simple(
     real_bonds_filtered = torch.stack(rows)
 
     # Adjust columns to sim width
-    sim_rows, sim_cols = sim_shape
+    _, sim_cols = sim_shape
     _, real_cols = real_bonds_filtered.shape
     if real_cols > sim_cols:
         real_bonds_filtered = real_bonds_filtered[:, :sim_cols]
@@ -41,43 +37,6 @@ def _filter_real_bonds_simple(
         real_bonds_filtered = torch.cat([real_bonds_filtered, pad], dim=1)
     return real_bonds_filtered
 
-
-def _filter_real_bonds_active_miners(
-    *,
-    real_bonds_full_norm: torch.Tensor,
-    validators_epoch: List[str],
-    validator_positions: List[Optional[int]],
-    sim_bonds_epoch: torch.Tensor,
-    case,
-    sim_epoch_idx: Optional[int],
-) -> torch.Tensor:
-    """
-    Build a filtered real bonds matrix using active-miner UIDs (columns) for the epoch,
-    then filter rows to match validator order. If inputs are insufficient, falls back to
-    no active-miner selection.
-    """
-    real_cols = real_bonds_full_norm
-    try:
-        miner_uids: List[int] = []
-        if case is not None and hasattr(case, "miner_indices_epochs") and sim_epoch_idx is not None:
-            if len(case.miner_indices_epochs) > sim_epoch_idx:
-                miner_uids = list(case.miner_indices_epochs[sim_epoch_idx])
-        if miner_uids and sim_bonds_epoch.shape[1] == len(miner_uids):
-            real_cols = real_bonds_full_norm[:, miner_uids]
-    except Exception:
-        real_cols = real_bonds_full_norm
-
-    if not validators_epoch:
-        return torch.zeros_like(sim_bonds_epoch)
-
-    rows = []
-    for pos in validator_positions:
-        if pos is None:
-            rows.append(torch.zeros(real_cols.shape[1], dtype=real_cols.dtype))
-        else:
-            rows.append(real_cols[pos])
-    real_bonds_filtered = torch.stack(rows)
-    return real_bonds_filtered
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +47,6 @@ def compare_bonds(
     validators_epoch: List[str],
     epoch_hotkeys: List[str],
     tolerance: float,
-    case=None,
     sim_epoch_idx: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Compare simulation bonds with real bonds (filtered to validator rows)."""
@@ -113,32 +71,18 @@ def compare_bonds(
     real_bonds_full_norm = real_bonds_full_norm / col_sums_full
 
     # Map validator hotkeys to uids (rows in full 256x256)
-    validator_positions = []
-    for hk in validators_epoch:
-        try:
-            validator_positions.append(epoch_hotkeys.index(hk))
-        except ValueError:
-            validator_positions.append(None)
+    hotkey_index = {hk: idx for idx, hk in enumerate(epoch_hotkeys)}
+    validator_positions = [hotkey_index.get(hk) for hk in validators_epoch]
 
     
 
     # Choose filtering strategy
-    if USE_ACTIVE_MINER_FILTER:
-        real_bonds_filtered = _filter_real_bonds_active_miners(
-            real_bonds_full_norm=real_bonds_full_norm,
-            validators_epoch=validators_epoch,
-            validator_positions=validator_positions,
-            sim_bonds_epoch=sim_bonds_epoch,
-            case=case,
-            sim_epoch_idx=sim_epoch_idx,
-        )
-    else:
-        real_bonds_filtered = _filter_real_bonds_simple(
-            real_bonds_full_norm=real_bonds_full_norm,
-            validators_epoch=validators_epoch,
-            validator_positions=validator_positions,
-            sim_shape=sim_bonds_epoch.shape,
-        )
+    real_bonds_filtered = _filter_real_bonds_simple(
+        real_bonds_full_norm=real_bonds_full_norm,
+        validators_epoch=validators_epoch,
+        validator_positions=validator_positions,
+        sim_shape=sim_bonds_epoch.shape,
+    )
 
     # Sanity shape check
     if sim_bonds_epoch.shape != real_bonds_filtered.shape:
@@ -278,8 +222,8 @@ def compare_incentives(
 
     # Optional: recompute reference incentives (W,S,C) to detect mapping/index issues and report
     recompute_diff_max: Optional[float] = None
-    try:
-        if case is not None and yuma_config is not None and sim_epoch_idx is not None:
+    if case is not None and yuma_config is not None and sim_epoch_idx is not None:
+        try:
             W = case.weights_epochs[sim_epoch_idx]
             S = case.stakes_epochs[sim_epoch_idx]
             denom_W = W.sum(dim=1, keepdim=True)
@@ -293,8 +237,8 @@ def compare_incentives(
             # Compare dict vs recompute
             if sim_tensor_ref.shape == sim_tensor.shape:
                 recompute_diff_max = float(torch.max(torch.abs(sim_tensor - sim_tensor_ref)).item())
-    except Exception:
-        pass
+        except (AttributeError, IndexError, TypeError, ValueError) as exc:
+            logger.debug("Failed to recompute incentives for comparison: %s", exc)
     if sim_tensor.shape != real_incentives_epoch.shape:
         return {
             "error": f"Shape mismatch: sim={tuple(sim_tensor.shape)}, real={tuple(real_incentives_epoch.shape)}",

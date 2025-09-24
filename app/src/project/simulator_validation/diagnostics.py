@@ -844,8 +844,6 @@ def create_diagnostic_artifacts(
         )
         diagnostics["weight_analysis_report"] = weight_report
 
-    # Consensus snapshot removed per request
-
     # Add incentives snapshot: sim vs real for last compared epoch
     try:
         epoch = last_epoch_idx
