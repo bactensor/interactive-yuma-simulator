@@ -27,321 +27,6 @@ from project.yuma_simulation._internal.yumas import (
 
 logger = logging.getLogger(__name__)
 
-def _detect_hotkey_swaps(
-    epoch: int,
-    hotkeys_epochs: list[list[str]],
-    current_miner_indices: list[int]
-) -> set[int]:
-    """
-    Detect UIDs where hotkeys have changed between epochs.
-    
-    Args:
-        epoch: Current epoch number
-        hotkeys_epochs: List of hotkeys for each epoch
-        current_miner_indices: List of miner UIDs for current epoch
-        
-    Returns:
-        Set of UIDs where hotkey swaps were detected
-    """
-    new_changed_uids: set[int] = set()
-    
-    if epoch <= 0:
-        return new_changed_uids
-        
-    try:
-        prev_hotkeys = hotkeys_epochs[epoch - 1]
-        curr_hotkeys = hotkeys_epochs[epoch]
-    except Exception:
-        return new_changed_uids
-    
-    max_uids = min(len(prev_hotkeys), len(curr_hotkeys))
-    for uid in range(max_uids):
-        prev_hk = prev_hotkeys[uid]
-        curr_hk = curr_hotkeys[uid]
-        if prev_hk != curr_hk and uid in current_miner_indices:
-            new_changed_uids.add(uid)
-            
-    if new_changed_uids:
-        logger.debug(
-            f"[BOND] Epoch {epoch}: hotkey swap UIDs -> {sorted(new_changed_uids)}"
-        )
-    
-    return new_changed_uids
-
-
-def _apply_commit_reveal_weight_masking(
-    W: torch.Tensor,
-    mask_uids: set[int],
-    current_validators: list[str],
-    epoch: int,
-    case = None
-) -> None:
-    """
-    Apply commit-reveal weight masking based on validator commit timing (in-place).
-
-    For each validator, calculates when their weights will be revealed based on their
-    last commit time plus the reveal interval. Masks weights from validators to miners
-    if the reveal happens after the miner's registration.
-
-    Args:
-        W: Current weights tensor (validators x miners) - modified in-place
-        mask_uids: Set of miner UIDs that had hotkey swaps/re-registrations to check
-        current_validators: List of validator hotkeys for current epoch
-        hotkeys_epochs: List of hotkeys for each epoch (not used in new logic)
-        epoch: Current epoch number
-        case: Case containing metadata with timing information and commit reveal interval
-    """
-    # Check if we have the necessary metadata
-    if case is None or not hasattr(case, 'metas') or epoch >= len(case.metas):
-        return
-
-    current_meta = case.metas[epoch]
-    if 'last_updates' not in current_meta or 'blocks_at_registration' not in current_meta:
-        return
-
-    # Get the commit reveal interval from case
-    commit_reveal_interval = int(getattr(case, "commit_reveal_period_epochs", 0) or 0)
-    if commit_reveal_interval == 0:
-        return  # No commit reveal masking if interval is 0
-
-    last_updates = current_meta['last_updates']  # When each UID last updated weights
-    blocks_at_registration = current_meta['blocks_at_registration']  # When each UID registered
-    hotkeys = current_meta.get('hotkeys', [])
-
-    masked_pairs = []
-
-    # For each validator, check their reveal timing against miner registrations
-    for validator_idx, validator_hotkey in enumerate(current_validators):
-        # Find the UID for this validator
-        validator_uid = None
-        for uid, hk in enumerate(hotkeys):
-            if hk == validator_hotkey:
-                validator_uid = uid
-                break
-
-        if validator_uid is None or validator_uid >= len(last_updates):
-            continue
-
-        # Calculate when this validator's weights will be revealed
-        validator_last_update = last_updates[validator_uid]
-        reveal_block = validator_last_update + (commit_reveal_interval * 360)
-
-        # Check registration time for each miner in mask_uids
-        for miner_uid in mask_uids:
-            if miner_uid >= len(blocks_at_registration):
-                continue
-
-            miner_registration_block = blocks_at_registration[miner_uid]
-
-            # If reveal happens after miner registered, mask the weight
-            if reveal_block > miner_registration_block:
-                W[validator_idx, miner_uid] = 0.0
-                masked_pairs.append((validator_uid, miner_uid))
-
-    if masked_pairs:
-        logger.debug(
-            f"Epoch {epoch} - Commit-reveal masking applied: {len(masked_pairs)} validator->miner pairs masked"
-        )
-
-
-def _apply_commit_reveal_weight_masking_with_lookback(
-    W: torch.Tensor,
-    mask_uids: set[int],
-    current_validators: list[str],
-    hotkeys_epochs: list[list[str]],
-    epoch: int,
-    case = None
-) -> None:
-    """
-    Apply commit-reveal masking using historical commits from commit_reveal_interval epochs ago.
-
-    Instead of deriving the reveal block from the most recent update, this variant looks back
-    by the commit-reveal interval to fetch the commit blocks and compares them with the current
-    epoch's miner registration blocks. Suitable when validator commits should be evaluated
-    against historical state rather than their most recent update.
-
-    Args:
-        W: Current weights tensor (validators x miners) - modified in-place
-        mask_uids: Set of miner UIDs that had hotkey swaps/re-registrations to check
-        current_validators: List of validator hotkeys for the current epoch
-        hotkeys_epochs: List of hotkeys for each epoch (unused here but kept for parity)
-        epoch: Current epoch number
-        case: Case containing metadata with timing information and commit reveal interval
-    """
-    if case is None or not hasattr(case, "metas") or epoch >= len(case.metas):
-        logger.debug(
-            "Commit-reveal lookback skipped: missing case metas or epoch %s out of range",
-            epoch,
-        )
-        return
-
-    commit_reveal_interval = int(getattr(case, "commit_reveal_period_epochs", 0) or 0)
-    if commit_reveal_interval <= 0:
-        logger.debug(
-            "Commit-reveal lookback skipped: commit_reveal_period_epochs=%s",
-            commit_reveal_interval,
-        )
-        return
-
-    lookback_epoch = epoch - commit_reveal_interval
-    if lookback_epoch < 0 or lookback_epoch >= len(case.metas):
-        logger.debug(
-            "Commit-reveal lookback skipped: lookback epoch %s outside [0, %s)",
-            lookback_epoch,
-            len(case.metas),
-        )
-        return
-
-    current_meta = case.metas[epoch]
-    lookback_meta = case.metas[lookback_epoch]
-
-    if (
-        "blocks_at_registration" not in current_meta
-        or "hotkeys" not in current_meta
-        or "last_updates" not in lookback_meta
-    ):
-        logger.debug(
-            "Commit-reveal lookback skipped: required metadata missing at epoch %s",
-            epoch,
-        )
-        return
-
-    blocks_at_registration = current_meta["blocks_at_registration"]
-    current_hotkeys = current_meta.get("hotkeys", [])
-    current_last_updates = current_meta["last_updates"]
-    lookback_last_updates = lookback_meta["last_updates"]
-
-    if hotkeys_epochs and lookback_epoch < len(hotkeys_epochs):
-        lookback_hotkeys = hotkeys_epochs[lookback_epoch] or []
-    else:
-        lookback_hotkeys = lookback_meta.get("hotkeys", [])
-
-    masked_pairs: list[tuple[int, int]] = []
-
-    for validator_idx, validator_hotkey in enumerate(current_validators):
-        validator_uid = None
-        for uid, hk in enumerate(current_hotkeys):
-            if hk == validator_hotkey:
-                validator_uid = uid
-                break
-
-        if (
-            validator_uid is None
-            or validator_uid >= len(lookback_last_updates)
-        ):
-            logger.debug(
-                "Commit-reveal lookback continue: validator %s missing in lookback epoch %s",
-                validator_hotkey,
-                lookback_epoch,
-            )
-            continue
-
-        lookback_hotkey = (
-            lookback_hotkeys[validator_uid]
-            if validator_uid < len(lookback_hotkeys)
-            else None
-        )
-
-        if lookback_hotkey != validator_hotkey:
-            logger.debug(
-                "Commit-reveal lookback continue: validator %s hotkey mismatch (lookback=%s)",
-                validator_hotkey,
-                lookback_hotkey,
-            )
-            continue
-
-        lookback_commit_block = lookback_last_updates[validator_uid]
-        current_commit_block = current_last_updates[validator_uid]
-
-        # Check registration time for each miner in mask_uids
-        for miner_uid in mask_uids:
-            if miner_uid >= len(blocks_at_registration):
-                logger.debug(
-                    "Commit-reveal lookback continue: miner uid %s missing registration block",
-                    miner_uid,
-                )
-                continue
-
-            miner_registration_block = blocks_at_registration[miner_uid]
-
-            #TODO delete this condition when real yuma got fixed...
-            if current_commit_block > lookback_commit_block and current_commit_block > miner_registration_block:
-                continue
-
-            if lookback_commit_block < miner_registration_block:
-                W[validator_idx, miner_uid] = 0.0
-                masked_pairs.append((validator_uid, miner_uid))
-
-    if masked_pairs:
-        logger.info(
-            f"Epoch {epoch} - Commit-reveal masking applied: {len(masked_pairs)} validator->miner pairs masked"
-        )
-
-
-def _apply_temporal_weight_masking(
-    W: torch.Tensor,
-    current_validators: list[str],
-    current_miner_indices: list[int],
-    case,
-    epoch: int
-) -> None:
-    """
-    Apply temporal weight masking (in-place) - prevents retroactive weight assignments.
-
-    Masks weights where validator's last_update <= miner's block_at_registration.
-    This ensures validators can't influence miners that registered after their weights were set,
-    maintaining temporal consistency in the consensus mechanism.
-
-    Args:
-        W: Current weights tensor (validators x miners) - modified in-place
-        current_validators: List of validator hotkeys for current epoch
-        current_miner_indices: List of miner UIDs for current epoch
-        case: Case containing metadata with timing information
-        epoch: Current epoch number
-    """
-    if not hasattr(case, 'metas') or epoch >= len(case.metas):
-        return
-
-    current_meta = case.metas[epoch]
-    if 'last_updates' not in current_meta or 'blocks_at_registration' not in current_meta:
-        return
-
-    last_updates = current_meta['last_updates']  # When each UID last updated weights
-    blocks_at_registration = current_meta['blocks_at_registration']  # When each UID registered
-    hotkeys = current_meta.get('hotkeys', [])
-
-    masked_positions = []
-
-    # Check each validator-miner pair
-    for validator_idx, validator_hotkey in enumerate(current_validators):
-        # Find this validator's UID
-        validator_uid = None
-        for uid, hotkey in enumerate(hotkeys):
-            if hotkey == validator_hotkey:
-                validator_uid = uid
-                break
-
-        if validator_uid is None or validator_uid >= len(last_updates):
-            continue
-
-        validator_last_update = last_updates[validator_uid]
-
-        for miner_idx, miner_uid in enumerate(current_miner_indices):
-            if miner_uid >= len(blocks_at_registration):
-                continue
-
-            miner_registration_block = blocks_at_registration[miner_uid]
-
-            # Apply temporal masking rule: last_update <= block_at_registration
-            if validator_last_update <= miner_registration_block:
-                W[validator_idx, miner_idx] = 0.0
-                masked_positions.append((validator_uid, miner_uid))
-
-    if masked_positions:
-        logger.info(
-            f"Epoch {epoch} - Temporal masking: {len(masked_positions)} weights masked "
-            f"(validator_last_update <= miner_registration_block)"
-        )
 
 def _run_simulation(
     case: BaseCase,
@@ -1601,3 +1286,320 @@ def _compute_liquid_alpha(
 
     alpha_slice = alpha_low + combined_diff * (alpha_high - alpha_low)
     return alpha_slice.clamp(alpha_low, alpha_high)
+
+
+def _detect_hotkey_swaps(
+    epoch: int,
+    hotkeys_epochs: list[list[str]],
+    current_miner_indices: list[int]
+) -> set[int]:
+    """
+    Detect UIDs where hotkeys have changed between epochs.
+    
+    Args:
+        epoch: Current epoch number
+        hotkeys_epochs: List of hotkeys for each epoch
+        current_miner_indices: List of miner UIDs for current epoch
+        
+    Returns:
+        Set of UIDs where hotkey swaps were detected
+    """
+    new_changed_uids: set[int] = set()
+    
+    if epoch <= 0:
+        return new_changed_uids
+        
+    try:
+        prev_hotkeys = hotkeys_epochs[epoch - 1]
+        curr_hotkeys = hotkeys_epochs[epoch]
+    except Exception:
+        return new_changed_uids
+    
+    max_uids = min(len(prev_hotkeys), len(curr_hotkeys))
+    for uid in range(max_uids):
+        prev_hk = prev_hotkeys[uid]
+        curr_hk = curr_hotkeys[uid]
+        if prev_hk != curr_hk and uid in current_miner_indices:
+            new_changed_uids.add(uid)
+            
+    if new_changed_uids:
+        logger.debug(
+            f"[BOND] Epoch {epoch}: hotkey swap UIDs -> {sorted(new_changed_uids)}"
+        )
+    
+    return new_changed_uids
+
+
+def _apply_commit_reveal_weight_masking(
+    W: torch.Tensor,
+    mask_uids: set[int],
+    current_validators: list[str],
+    epoch: int,
+    case = None
+) -> None:
+    """
+    Apply commit-reveal weight masking based on validator commit timing (in-place).
+
+    For each validator, calculates when their weights will be revealed based on their
+    last commit time plus the reveal interval. Masks weights from validators to miners
+    if the reveal happens after the miner's registration.
+
+    Args:
+        W: Current weights tensor (validators x miners) - modified in-place
+        mask_uids: Set of miner UIDs that had hotkey swaps/re-registrations to check
+        current_validators: List of validator hotkeys for current epoch
+        hotkeys_epochs: List of hotkeys for each epoch (not used in new logic)
+        epoch: Current epoch number
+        case: Case containing metadata with timing information and commit reveal interval
+    """
+    # Check if we have the necessary metadata
+    if case is None or not hasattr(case, 'metas') or epoch >= len(case.metas):
+        return
+
+    current_meta = case.metas[epoch]
+    if 'last_updates' not in current_meta or 'blocks_at_registration' not in current_meta:
+        return
+
+    # Get the commit reveal interval from case
+    commit_reveal_interval = int(getattr(case, "commit_reveal_period_epochs", 0) or 0)
+    if commit_reveal_interval == 0:
+        return  # No commit reveal masking if interval is 0
+
+    last_updates = current_meta['last_updates']  # When each UID last updated weights
+    blocks_at_registration = current_meta['blocks_at_registration']  # When each UID registered
+    hotkeys = current_meta.get('hotkeys', [])
+
+    masked_pairs = []
+
+    # For each validator, check their reveal timing against miner registrations
+    for validator_idx, validator_hotkey in enumerate(current_validators):
+        # Find the UID for this validator
+        validator_uid = None
+        for uid, hk in enumerate(hotkeys):
+            if hk == validator_hotkey:
+                validator_uid = uid
+                break
+
+        if validator_uid is None or validator_uid >= len(last_updates):
+            continue
+
+        # Calculate when this validator's weights will be revealed
+        validator_last_update = last_updates[validator_uid]
+        reveal_block = validator_last_update + (commit_reveal_interval * 360)
+
+        # Check registration time for each miner in mask_uids
+        for miner_uid in mask_uids:
+            if miner_uid >= len(blocks_at_registration):
+                continue
+
+            miner_registration_block = blocks_at_registration[miner_uid]
+
+            # If reveal happens after miner registered, mask the weight
+            if reveal_block > miner_registration_block:
+                W[validator_idx, miner_uid] = 0.0
+                masked_pairs.append((validator_uid, miner_uid))
+
+    if masked_pairs:
+        logger.debug(
+            f"Epoch {epoch} - Commit-reveal masking applied: {len(masked_pairs)} validator->miner pairs masked"
+        )
+
+
+def _apply_commit_reveal_weight_masking_with_lookback(
+    W: torch.Tensor,
+    mask_uids: set[int],
+    current_validators: list[str],
+    hotkeys_epochs: list[list[str]],
+    epoch: int,
+    case = None
+) -> None:
+    """
+    Apply commit-reveal masking using historical commits from commit_reveal_interval epochs ago.
+
+    Instead of deriving the reveal block from the most recent update, this variant looks back
+    by the commit-reveal interval to fetch the commit blocks and compares them with the current
+    epoch's miner registration blocks. Suitable when validator commits should be evaluated
+    against historical state rather than their most recent update.
+
+    Args:
+        W: Current weights tensor (validators x miners) - modified in-place
+        mask_uids: Set of miner UIDs that had hotkey swaps/re-registrations to check
+        current_validators: List of validator hotkeys for the current epoch
+        hotkeys_epochs: List of hotkeys for each epoch (unused here but kept for parity)
+        epoch: Current epoch number
+        case: Case containing metadata with timing information and commit reveal interval
+    """
+    if case is None or not hasattr(case, "metas") or epoch >= len(case.metas):
+        logger.debug(
+            "Commit-reveal lookback skipped: missing case metas or epoch %s out of range",
+            epoch,
+        )
+        return
+
+    commit_reveal_interval = int(getattr(case, "commit_reveal_period_epochs", 0) or 0)
+    if commit_reveal_interval <= 0:
+        logger.debug(
+            "Commit-reveal lookback skipped: commit_reveal_period_epochs=%s",
+            commit_reveal_interval,
+        )
+        return
+
+    lookback_epoch = epoch - commit_reveal_interval
+    if lookback_epoch < 0 or lookback_epoch >= len(case.metas):
+        logger.debug(
+            "Commit-reveal lookback skipped: lookback epoch %s outside [0, %s)",
+            lookback_epoch,
+            len(case.metas),
+        )
+        return
+
+    current_meta = case.metas[epoch]
+    lookback_meta = case.metas[lookback_epoch]
+
+    if (
+        "blocks_at_registration" not in current_meta
+        or "hotkeys" not in current_meta
+        or "last_updates" not in lookback_meta
+    ):
+        logger.debug(
+            "Commit-reveal lookback skipped: required metadata missing at epoch %s",
+            epoch,
+        )
+        return
+
+    blocks_at_registration = current_meta["blocks_at_registration"]
+    current_hotkeys = current_meta.get("hotkeys", [])
+    current_last_updates = current_meta["last_updates"]
+    lookback_last_updates = lookback_meta["last_updates"]
+
+    if hotkeys_epochs and lookback_epoch < len(hotkeys_epochs):
+        lookback_hotkeys = hotkeys_epochs[lookback_epoch] or []
+    else:
+        lookback_hotkeys = lookback_meta.get("hotkeys", [])
+
+    masked_pairs: list[tuple[int, int]] = []
+
+    for validator_idx, validator_hotkey in enumerate(current_validators):
+        validator_uid = None
+        for uid, hk in enumerate(current_hotkeys):
+            if hk == validator_hotkey:
+                validator_uid = uid
+                break
+
+        if (
+            validator_uid is None
+            or validator_uid >= len(lookback_last_updates)
+        ):
+            logger.debug(
+                "Commit-reveal lookback continue: validator %s missing in lookback epoch %s",
+                validator_hotkey,
+                lookback_epoch,
+            )
+            continue
+
+        lookback_hotkey = (
+            lookback_hotkeys[validator_uid]
+            if validator_uid < len(lookback_hotkeys)
+            else None
+        )
+
+        if lookback_hotkey != validator_hotkey:
+            logger.debug(
+                "Commit-reveal lookback continue: validator %s hotkey mismatch (lookback=%s)",
+                validator_hotkey,
+                lookback_hotkey,
+            )
+            continue
+
+        lookback_commit_block = lookback_last_updates[validator_uid]
+        current_commit_block = current_last_updates[validator_uid]
+
+        # Check registration time for each miner in mask_uids
+        for miner_uid in mask_uids:
+            if miner_uid >= len(blocks_at_registration):
+                logger.debug(
+                    "Commit-reveal lookback continue: miner uid %s missing registration block",
+                    miner_uid,
+                )
+                continue
+
+            miner_registration_block = blocks_at_registration[miner_uid]
+
+            #TODO delete this condition when real yuma got fixed...
+            if current_commit_block > lookback_commit_block and current_commit_block > miner_registration_block:
+                continue
+
+            if lookback_commit_block < miner_registration_block:
+                W[validator_idx, miner_uid] = 0.0
+                masked_pairs.append((validator_uid, miner_uid))
+
+    if masked_pairs:
+        logger.info(
+            f"Epoch {epoch} - Commit-reveal masking applied: {len(masked_pairs)} validator->miner pairs masked"
+        )
+
+
+def _apply_temporal_weight_masking(
+    W: torch.Tensor,
+    current_validators: list[str],
+    current_miner_indices: list[int],
+    case,
+    epoch: int
+) -> None:
+    """
+    Apply temporal weight masking (in-place) - prevents retroactive weight assignments.
+
+    Masks weights where validator's last_update <= miner's block_at_registration.
+    This ensures validators can't influence miners that registered after their weights were set,
+    maintaining temporal consistency in the consensus mechanism.
+
+    Args:
+        W: Current weights tensor (validators x miners) - modified in-place
+        current_validators: List of validator hotkeys for current epoch
+        current_miner_indices: List of miner UIDs for current epoch
+        case: Case containing metadata with timing information
+        epoch: Current epoch number
+    """
+    if not hasattr(case, 'metas') or epoch >= len(case.metas):
+        return
+
+    current_meta = case.metas[epoch]
+    if 'last_updates' not in current_meta or 'blocks_at_registration' not in current_meta:
+        return
+
+    last_updates = current_meta['last_updates']  # When each UID last updated weights
+    blocks_at_registration = current_meta['blocks_at_registration']  # When each UID registered
+    hotkeys = current_meta.get('hotkeys', [])
+
+    masked_positions = []
+
+    # Check each validator-miner pair
+    for validator_idx, validator_hotkey in enumerate(current_validators):
+        # Find this validator's UID
+        validator_uid = None
+        for uid, hotkey in enumerate(hotkeys):
+            if hotkey == validator_hotkey:
+                validator_uid = uid
+                break
+
+        if validator_uid is None or validator_uid >= len(last_updates):
+            continue
+
+        validator_last_update = last_updates[validator_uid]
+
+        for miner_idx, miner_uid in enumerate(current_miner_indices):
+            if miner_uid >= len(blocks_at_registration):
+                continue
+
+            miner_registration_block = blocks_at_registration[miner_uid]
+
+            # Apply temporal masking rule: last_update <= block_at_registration
+            if validator_last_update <= miner_registration_block:
+                W[validator_idx, miner_idx] = 0.0
+                masked_positions.append((validator_uid, miner_uid))
+
+    if masked_positions:
+        logger.info(
+            f"Epoch {epoch} - Temporal masking: {len(masked_positions)} weights masked "
+            f"(validator_last_update <= miner_registration_block)"
+        )
